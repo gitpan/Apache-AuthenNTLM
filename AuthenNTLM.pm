@@ -10,7 +10,7 @@
 #   IMPLIED WARRANTIES, INCLUDING, WITHOUT LIMITATION, THE IMPLIED
 #   WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR A PARTICULAR PURPOSE.
 #
-#   $Id: AuthenNTLM.pm,v 1.7 2002/01/08 05:17:12 richter Exp $
+#   $Id: AuthenNTLM.pm,v 1.11 2002/02/26 11:07:14 richter Exp $
 #
 ###################################################################################
 
@@ -20,7 +20,7 @@ package Apache::AuthenNTLM ;
 use strict ;
 use vars qw{$cache $VERSION} ;
 
-$VERSION = 0.11 ;
+$VERSION = 0.14 ;
 
 my $debug = 0 ;
 
@@ -362,11 +362,12 @@ sub handler ($$)
     my $type ;
     my $nonce = '' ;
     my $self ;
-	my $conn = $r -> connection ;
+    my $conn = $r -> connection ;
 
-    select (STDERR) ;
+    my $fh = select (STDERR) ;
     $| = 1 ;
-   
+    select ($fh) ;
+
     print STDERR "AuthenNTLM: Start NTLM Authen handler pid = $$, connection = $$conn cuser = ", $conn -> user, ' ip = ', $conn -> remote_ip, ' remote_host = <', $conn -> remote_host, ">\n" if ($debug) ; 
     
     # we cannot attach our object to the connection record. Since in
@@ -390,7 +391,7 @@ sub handler ($$)
 		
 		if ($self -> {ok})
 			{
-			$conn -> user($self->{username}) ;
+			$conn -> user($self->{mappedusername}) ;
 			
 			# we accecpt the user because we are on the same connection
 			print STDERR "AuthenNTLM: OK because same connection pid = $$, connection = $$conn cuser = ", $conn -> user, ' ip = ', $conn -> remote_ip, "\n" if ($debug) ; 
@@ -443,7 +444,7 @@ sub handler ($$)
         return AUTH_REQUIRED ;
         }
 
-	$conn -> user($self -> map_user ($r)) ;
+	$conn -> user($self -> {mappedusername} = $self -> map_user ($r)) ;
 
 	$self->{ok} = 1 ;
 
@@ -625,7 +626,7 @@ precondition is met. Note: The functions preconditon_met and lookup_user
 do the real work and not shown here.
 
 
-    package Apache::MyAuthenNTLM
+    package Apache::MyAuthenNTLM ;
 
     use Apache::AuthenNTLM ;
 
@@ -634,7 +635,9 @@ do the real work and not shown here.
 
     sub handler ($$)
         {
-        return Apache::AuthenNTLM::handler (@_) if (precondition_met()) ;
+        my ($self, $r) = @_ ;
+
+        return Apache::AuthenNTLM::handler ($self, $r) if (precondition_met()) ;
         return DECLINED ;
         }
 

@@ -12,7 +12,7 @@ THIS PACKAGE IS PROVIDED "AS IS" AND WITHOUT ANY EXPRESS OR IMPLIED
 WARRANTIES, INCLUDING, WITHOUT LIMITATION, THE IMPLIED WARRANTIES OF 
 MERCHANTIBILITY AND FITNESS FOR A PARTICULAR PURPOSE.
 
-$Id: README,v 1.2 2002/01/04 07:15:28 richter Exp $
+$Id: README,v 1.3 2002/01/08 11:28:11 richter Exp $
 
 
 OVERVIEW
@@ -27,7 +27,9 @@ his/her password again.
 
 The NTLM protocol performs a challenge/response to exchange a random number
 (nonce) and get back a md4 hash, which is build form the users password
-and the nonce. This makes sure that no cleartext password goes over the wire.
+and the nonce. This makes sure that no cleartext password goes over the wire,
+so it's more secure than basic authentication, which doesn't mean it's
+a real secure authentication scheme.
 
 Some information about NTLM can be found at
 

@@ -39,7 +39,7 @@ int Valid_User(char *USERNAME,char *PASSWORD,char *SERVER,char *BACKUP, char *DO
       return(NTV_PROTOCOL_ERROR);
     }
 
-  if (SMB_Logon_Server(con, USERNAME, PASSWORD) < 0) {
+  if (SMB_Logon_Server(con, USERNAME, PASSWORD, 0, NULL) < 0) {
     SMB_Discon(con,0);
     return(NTV_LOGON_ERROR);
   }

@@ -1,0 +1,19 @@
+ 0.14  26. Feb 2002
+
+   - fixed a problem that page content of Perl sometimes goes to the
+     stderr instead of stdout
+
+ 0.13  9. Jan 2002
+
+    - return mapped username, when second request on same connection, 
+      instead of unmapped
+
+ 0.12  8. Jan 2002 
+
+    - fix broken Authen::Smb::authen function in Authen::Smb 0.92 that
+      ships with Apache::AuthenNTLM
+
+ 0.11  8. Jan 2002
+
+    - Initial public release
+

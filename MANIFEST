@@ -2,10 +2,10 @@ AuthenNTLM.pm
 MANIFEST
 Makefile.PL
 README
+Changes
 smb/Changes
 smb/INSTALL
 smb/MANIFEST
-smb/Makefile
 smb/Makefile.PL
 smb/README
 smb/Smb.pm
