@@ -1,4 +1,10 @@
 
+2.01  22. Jul 2003
+   
+   - Ported to work with both versions of modperl
+   - Cleaned up the Documentation a bit
+   - Fixed broken URLs in README
+ 
 0.23  12. Nov 2002
 
    - Fixed possible lockup with POST data. Patch from Gerald Combs.

@@ -1,4 +1,3 @@
-
 ###################################################################################
 #
 #   Apache::AuthenNTLM - Copyright (c) 2002 Gerald Richter / ECOS
@@ -18,9 +17,9 @@
 package Apache::AuthenNTLM ;
 
 use strict ;
-use vars qw{$cache $VERSION %msgflags1 %msgflags2 %msgflags3 %invflags1 %invflags2 %invflags3 $debug} ;
+use vars qw{$cache $VERSION %msgflags1 %msgflags2 %msgflags3 %invflags1 %invflags2 %invflags3 $addr $port $debug} ;
 
-$VERSION = 0.23 ;
+$VERSION = 2.01 ;
 
 $debug = 0 ;
 
@@ -29,8 +28,6 @@ $cache = undef ;
 use MIME::Base64 () ;
 use Authen::Smb 0.95 ;
 use Socket ;
-use Apache::Constants qw(:common);
-
 
 %msgflags1 = ( 0x01 => "NEGOTIATE_UNICODE",
        0x02 => "NEGOTIATE_OEM",
@@ -65,6 +62,35 @@ use Apache::Constants qw(:common);
 %invflags3 = ( "TARGET_TYPE_DOMAIN" => 0x01,
        "TARGET_TYPE_SERVER" => 0x02,
      );
+     
+############################################
+# here is where we start the new code....
+############################################
+use mod_perl ;
+
+# use Apache::Constants qw(:common);
+# setting the constants to help identify which version of mod_perl
+# is installed
+use constant MP2 => ($mod_perl::VERSION >= 1.99);
+
+# test for the version of mod_perl, and use the appropriate libraries
+BEGIN {
+        if (MP2) {
+                require Apache::Const;
+                require Apache::Access;
+                require Apache::Connection;
+                require Apache::Log;
+                require Apache::RequestRec;
+                require Apache::RequestUtil;
+		require APR::Table;
+		require APR::SockAddr;
+                Apache::Const->import(-compile => 'HTTP_UNAUTHORIZED','HTTP_INTERNAL_SERVER_ERROR','DECLINED','HTTP_FORBIDDEN','OK');
+        } else {
+                require Apache::Constants;
+                Apache::Constants->import('HTTP_UNAUTHORIZED','HTTP_INTERNAL_SERVER_ERROR','DECLINED','HTTP_FORBIDDEN','OK');
+        }
+}
+##################### end modperl code ######################
 
 sub get_config
 
@@ -134,32 +160,33 @@ sub get_nonce
     # this is not the real nonce!
     # we just need to preallocate some space (8 bytes) where Authen::Smb::Valid_User_Connect
     # puts the real nonce
-    my $nonce = '12345678' ; 
-    $self -> {domain} = $self -> {fallbackdomain} 
+    my $nonce = '12345678' ;
+    $self -> {domain} = $self -> {fallbackdomain}
                        if ($self -> {fallbackdomain} && !($self -> {smbpdc}{lc ($self -> {domain})}));
     my $domain  = lc ($self -> {domain}) ;
     my $pdc     = $self -> {smbpdc}{$domain} ;
     my $bdc     = $self -> {smbbdc}{$domain} ;
 
-    if (!$pdc) 
+    if (!$pdc)
         {
-        $r->log_reason("No PDC and no fallbackdomain given for domain $domain") ;
+        MP2 ? $r->log_error("No PDC and no fallbackdomain given for domain $domain") : $r->log_reason("No PDC and no fallbackdomain given for domain $domain") ;
         return '' ;
         }
 
     $self -> {nonce} = undef ;
-    
+
     print STDERR "[$$] AuthenNTLM: Connect to pdc = $pdc bdc = $bdc domain = $domain\n" if ($debug) ;
 
-    # smb aborts any connection that where no user is looged on as soon as somebody
+    # smb aborts any connection that where no user is logged on as soon as somebody
     # tries to open another one. So we have to make sure two request, do not start
     # two auth cycles at the same time. To avoid a hang of the whole server we wrap it with
     # a small timeout
-    if ($self->{semkey}) 
+    if ($self->{semkey})
         {
         eval
             {
-            local $SIG{ALRM} = sub { print STDERR "[$$] AuthenNTLM: timed out while waiting for lock (key = $self->{semkey})\n"; die ; };
+            local $SIG{ALRM} = sub { print STDERR "[$$] AuthenNTLM: timed out while waiting for lock (key = $self->{semkey})\n";  die ; };
+
             alarm $self -> {semtimeout} ;
             $self -> {lock} = Apache::AuthenNTLM::Lock -> lock ($self->{semkey}, $debug) ;
             alarm 0;
@@ -167,17 +194,17 @@ sub get_nonce
         }
 
     $self -> {smbhandle} = Authen::Smb::Valid_User_Connect ($pdc, $bdc, $domain, $nonce) ;
-    
-    if (!$self -> {smbhandle}) 
+
+    print STDERR "[$$] the \$self->{smbhandle} is $self->{smbhandle}\n";
+    if (!$self -> {smbhandle})
         {
-        $r->log_reason("Connect to SMB Server faild (pdc = $pdc bdc = $bdc domain = $domain error = ". 
-                        Authen::Smb::SMBlib_errno . '/' . Authen::Smb::SMBlib_SMB_Error . ") for " . $r -> uri) ;
+        MP2 ?   $r->log_error("Connect to SMB Server failed (pdc = $pdc bdc = $bdc domain = $domain error = ". Authen::Smb::SMBlib_errno . '/' . Authen::Smb::SMBlib_SMB_Error . ") for " . $r -> uri) : $r->log_reason("Connect to SMB Server faild (pdc = $pdc bdc = $bdc domain = $domain error = ". Authen::Smb::SMBlib_errno . '/' . Authen::Smb::SMBlib_SMB_Error . ") for " . $r -> uri) ;
         return undef ;
         }
-   
+
     return $self -> {nonce} = $nonce ;
     }
-    
+
 
 
 sub verify_user
@@ -188,7 +215,7 @@ sub verify_user
     if (!$self -> {smbhandle})
         {
         $self -> {lock} = undef ; # reset lock in case anything has gone wrong
-        $r->log_reason("SMB Server connection not open in state 3 for " . $r -> uri) ;
+        MP2 ?  $r->log_error("SMB Server connection not open in state 3 for " . $r -> uri) : $r->log_reason("SMB Server connection not open in state 3 for " . $r -> uri) ;
         return ;
         }
 
@@ -212,14 +239,14 @@ sub verify_user
 
     if ($rc == &Authen::Smb::NTV_LOGON_ERROR)
         {
-        $r->log_reason("Wrong password/user (rc=$rc/$errno/$smberr): $self->{userdomain}\\$self->{username} for " . $r -> uri) ;
+        MP2 ? $r->log_error("Wrong password/user (rc=$rc/$errno/$smberr): $self->{userdomain}\\$self->{username} for " . $r -> uri) : $r->log_reason("Wrong password/user (rc=$rc/$errno/$smberr): $self->{userdomain}\\$self->{username} for " . $r -> uri) ;
         print STDERR "[$$] AuthenNTLM: rc = $rc  ntlmhash = $self->{usernthash}\n" if ($debug) ; 
         return ;
         }
 
     if ($rc)
         {
-        $r->log_reason("SMB Server error $rc/$errno/$smberr for " . $r -> uri) ;
+        MP2 ? $r->log_reason("SMB Server error $rc/$errno/$smberr for " . $r -> uri) : $r->log_reason("SMB Server error $rc/$errno/$smberr for " . $r -> uri) ;
         return ;
         }
 
@@ -258,23 +285,21 @@ sub get_msg_data
     {
     my ($self, $r) = @_ ;
 
-    my $auth_line = $r -> header_in ($r->proxyreq ? 'Proxy-Authorization'
-                                    : 'Authorization') ;
+    my $auth_line = MP2 ? $r->headers_in->{$r->proxyreq ? 'Proxy-Authorization' : 'Authorization'} : $r -> header_in ($r->proxyreq ? 'Proxy-Authorization' : 'Authorization') ;
 
     $self -> {ntlm}  = 0 ;
     $self -> {basic} = 0 ;
-
     if ($debug)
-        { 
+        {
         $auth_line =~ /^(.*?)\s+/ ;
         my $type = $1 ;
         print STDERR "[$$] AuthenNTLM: Authorization Header " . (defined($auth_line)?($debug > 1?$auth_line:$type):'<not given>') . "\n" if ($debug) ;
         }
-    if ($self -> {authntlm} && ($auth_line =~ /^NTLM\s+(.*?)$/i)) 
+    if ($self -> {authntlm} && ($auth_line =~ /^NTLM\s+(.*?)$/i))
 	{
 	$self -> {ntlm} = 1 ;
 	}
-    elsif ($self -> {authbasic} && ($auth_line =~ /^Basic\s+(.*?)$/i)) 
+    elsif ($self -> {authbasic} && ($auth_line =~ /^Basic\s+(.*?)$/i))
 	{
 	$self -> {basic}  = 1 ;
 	}
@@ -375,8 +400,11 @@ sub set_msg2
     my $data = pack ('Z8Ca7vvCCa2a8a8', 'NTLMSSP', 2, '', 40, 0, $charencoding,  $flags2, '', $nonce, '') ;
 
     my $header = 'NTLM '. MIME::Base64::encode($data, '') ;
-    $r->err_header_out ($r->proxyreq ? 'Proxy-Authenticate' : 'WWW-Authenticate', $header) ;
-   
+
+    # These were a part of the original code... Left until further notice -- July 22, 2003
+    # $r->err_headers_out->{'WWW-Authenticate', $header} ;
+    # MP2 ? $r->err_headers_out->{$r->proxyreq ? 'Proxy-Authenticate' : 'WWW-Authenticate', $header} : $r-> err_header_out ($r->proxyreq ? 'Proxy-Authenticate' : 'WWW-Authenticate', $header) ;
+
     if ($debug)
         {
         if ($debug > 1)
@@ -394,6 +422,7 @@ sub set_msg2
         print STDERR "[$$] AuthenNTLM: Send header: " . ($debug > 1?$header:'NTLM ...') . "\n" ;
         }
 
+	return $header;
     }
 
 
@@ -411,10 +440,10 @@ sub get_msg3
         $msg_len
         ) = unpack ('Z8Ca3vvVvvVvvVvvVvvVv', $data) ;
     
-    my $lm     = $lm_off  ?substr ($data, $lm_off,   $lm_len):'' ;
-    my $nt     = $nt_off  ?substr ($data, $nt_off,   $nt_len):'' ;
-    my $user   = $user_off? ($self->{accept_unicode} ? substr_unicode ($data, $user_off, $user_len) : substr( $data, $user_off, $user_len ) ) :'' ;
-    my $host   = $host_off? ($self->{accept_unicode} ? substr_unicode ($data, $host_off, $host_len) : substr( $data, $host_off, $host_len ) ) :'' ;
+    my $lm     = $lm_off  ? substr ($data, $lm_off,   $lm_len):'' ;
+    my $nt     = $nt_off  ? substr ($data, $nt_off,   $nt_len):'' ;
+    my $user   = $user_off ? ($self->{accept_unicode} ? substr_unicode ($data, $user_off, $user_len) : substr( $data, $user_off, $user_len ) ) :'' ;
+    my $host   = $host_off ? ($self->{accept_unicode} ? substr_unicode ($data, $host_off, $host_len) : substr( $data, $host_off, $host_len ) ) :'' ;
     my $domain = $dom_off ? ($self->{accept_unicode} ? substr_unicode ($data, $dom_off,  $dom_len) : substr( $data, $dom_off, $dom_len ) ) :'' ;
 
     $self -> {userdomain} = $dom_len?$domain:$self -> {defaultdomain} ;
@@ -467,31 +496,35 @@ sub DESTROY
     Authen::Smb::Valid_User_Disconnect ($self -> {smbhandle}) if ($self -> {smbhandle}) ;
     }
 
-
-
-sub handler ($$)
-    {
+sub handler1 ($$) {
     my ($class, $r) = @_ ;
     my $type ;
     my $nonce = '' ;
     my $self ;
     my $conn = $r -> connection ;
-    my $connhdr = $r -> header_in ('Connection') ;
+    my $connhdr = MP2 ? $r -> headers_in -> {'Connection'} : $r -> header_in ('Connection') ;
 
     my $fh = select (STDERR) ;
     $| = 1 ;
     select ($fh) ;
 
-    my ($addr, $port) = sockaddr_in ($conn -> remote_addr) ;
+    if (MP2)
+    {
+    	my $addr = $conn -> remote_addr -> ip_get ;
+    	my $port = $conn -> remote_addr -> port_get ;
+    }
+    else
+    {
+    	my ($addr, $port) = sockaddr_in ($conn -> remote_addr) ;
+    }
 
-    
-    print STDERR "[$$] AuthenNTLM: Start NTLM Authen handler pid = $$, connection = $$conn conn_http_hdr = $connhdr  main = " . ($r -> main) . " cuser = " . $conn -> user .
-                    ' remote_ip = ' . $conn -> remote_ip . " remote_port = " . unpack('n', $port) . ' remote_host = <' . $conn -> remote_host . "> version = $VERSION\n" if ($debug) ; 
-    
+    print STDERR "[$$] AuthenNTLM: Start NTLM Authen handler pid = $$, connection = $$conn conn_http_hdr = $connhdr  main = " . ($r -> main) . " cuser = " . $r -> user .
+                    ' remote_ip = ' . $conn -> remote_ip . " remote_port = " . unpack('n', $port) . ' remote_host = <' . $conn -> remote_host . "> version = $VERSION\n" if ($debug) ;
+
     # we cannot attach our object to the connection record. Since in
     # Apache 1.3 there is only one connection at a time per process
     # we can cache our object and check if the connection has changed.
-    # The check is done by slightly changing the remote_host member, which 
+    # The check is done by slightly changing the remote_host member, which
     # persists as long as the connection does
     # This has to be reworked to work with Apache 2.0
     if (ref ($cache) ne $class || $$conn != $cache -> {connectionid} || $conn -> remote_host ne $cache->{remote_host})
@@ -500,7 +533,7 @@ sub handler ($$)
         $self = {connectionid => $$conn, remote_host => $conn -> remote_host} ;
         bless $self, $class ;
 	$cache = $self ;
-	print STDERR "[$$] AuthenNTLM: Setup new object\n" if ($debug) ; 
+	print STDERR "[$$] AuthenNTLM: Setup new object\n" if ($debug) ;
         }
     else
         {
@@ -509,27 +542,27 @@ sub handler ($$)
 	
 	if ($self -> {ok})
             {
-            $conn -> user($self->{mappedusername}) ;
+            $r -> user($self->{mappedusername}) ;
 
-            # we accecpt the user because we are on the same connection
+            # we accept the user because we are on the same connection
             $type = $self -> get_msg ($r);
-            my $content_len = $r -> header_in('content-length') ;
+            my $content_len = MP2 ? $r->headers_in->{'content-length'} : $r -> header_in('content-length') ;
             my $method      = $r -> method ;
             print STDERR "[$$] AuthenNTLM: Same connection pid = $$, connection = $$conn cuser = " .
-                                $conn -> user . ' ip = ' . $conn -> remote_ip . ' method = ' . $method . ' Content-Length = ' .
+                                $r -> user . ' ip = ' . $conn -> remote_ip . ' method = ' . $method . ' Content-Length = ' .
                                 $content_len . ' type = ' . $type . "\n" if ($debug) ;
 
 
             # IE (5.5, 6.0, probably others) can send a type 1 message 
-            # after authenticating on the same connection.  This is a 
-            # problem for POST messages, because IE also sends a 
+            # after authenticating on the same connection.  This is a
+            # problem for POST messages, because IE also sends a
             # "Content-length: 0" with no POST data.
             if ($method eq 'GET' || $method eq 'HEAD' || $method eq 'OPTION' || $method eq 'DELETE' ||
-                            $content_len > 0 || $type == 3) 
+                            $content_len > 0 || $type == 3)
                 {
                 print STDERR "[$$] AuthenNTLM: OK because same connection\n" if ($debug) ;
-                return OK ;
-                }                            
+                return MP2 ? Apache::OK : Apache::Constants::OK ;
+                }
 
             }
         }
@@ -541,52 +574,55 @@ sub handler ($$)
     if (!$type)
         {
         $self -> {lock} = undef ; # reset lock in case anything has gone wrong
-        if (!$self->{ntlmauthoritative}) 
+        if (!$self->{ntlmauthoritative})
             { # see if we have any header
-            my $auth_line = $r -> header_in ($r->proxyreq ? 'Proxy-Authorization'
-                                    : 'Authorization') ;
+            my $auth_line = MP2 ? $r -> headers_in->{$r->proxyreq ? 'Proxy-Authorization' : 'Authorization'} : $r -> header_in ($r->proxyreq ? 'Proxy-Authorization' : 'Authorization') ;
             if ($auth_line)
                 {
-                $r->log_reason('Bad/Missing NTLM Authorization Header for ' . $r->uri . '; DECLINEing because we are not authoritative' ) ;
-                return DECLINED ;
+                MP2 ? $r->log_error('Bad/Missing NTLM Authorization Header for ' . $r->uri . '; DECLINEing because we are not authoritative' ) : $r->log_reason('Bad/Missing NTLM Authorization Header for ' . $r->uri . '; DECLINEing because we are not authoritative' ) ;
+                return MP2 ? Apache::DECLINED : Apache::Constants::DECLINED ;
                 }
             }
 
-        $r->log_reason('Bad/Missing NTLM/Basic Authorization Header for ' . $r->uri) ;
-        
+        MP2 ?  $r->log_error('Bad/Missing NTLM/Basic Authorization Header for ' . $r->uri) : $r->log_reason('Bad/Missing NTLM/Basic Authorization Header for ' . $r->uri) ;
+
 	my $hdr = $r -> err_headers_out ;
         $hdr -> add ($r->proxyreq ? 'Proxy-Authenticate' : 'WWW-Authenticate', 'NTLM') if ($self -> {authntlm}) ;
         $hdr -> add ($r->proxyreq ? 'Proxy-Authenticate' : 'WWW-Authenticate', 'Basic realm="' . $self -> {authname} . '"') if ($self -> {authbasic}) ;
-        return AUTH_REQUIRED ;
+        return MP2 ? Apache::HTTP_UNAUTHORIZED : Apache::Constants::HTTP_UNAUTHORIZED ;
         }
 
     if ($type == 1)
         {
+	my $log = $r->log;
         my $nonce = $self -> get_nonce ($r) ;
-        if (!$nonce) 
+        if (!$nonce)
             {
             $self -> {lock} = undef ; # reset lock in case anything has gone wrong
-            $r->log_reason("Cannot get nonce") if (!defined ($nonce)) ;
-            return $self->{ntlmauthoritative}?(defined($nonce)?FORBIDDEN:SERVER_ERROR):DECLINED ;
-            }
+            MP2 ?  $r->log_error("Cannot get nonce") : $r->log_reason("Cannot get nonce") if (!defined ($nonce)) ;
+            return $self->{ntlmauthoritative} ? (defined($nonce)) ? (MP2 ? Apache::HTTP_FORBIDDEN : Apache::Constants::HTTP_FORBIDDEN) : (MP2 ? Apache::HTTP_INTERNAL_SERVER_ERROR : Apache::Constants::HTTP_INTERNAL_SERVER_ERROR) : (MP2 ? Apache::DECLINED : Apache::Constants::DECLINED) ;
+	   }
 
-        $self -> set_msg2 ($r, $nonce) ;
-        return AUTH_REQUIRED ;
+        my $header1 = $self -> set_msg2 ($r, $nonce) ;
+	my $hdr = $r -> err_headers_out ;
+        $hdr -> add ($r->proxyreq ? 'Proxy-Authenticate' : 'WWW-Authenticate', $header1) if ($self -> {authntlm}) ;
+        return MP2 ? Apache::HTTP_UNAUTHORIZED : Apache::Constants::HTTP_UNAUTHORIZED ;
         }
     elsif ($type == 3)
         {
-        if ( !$self->verify_user( $r ) ) 
+	print STDERR "[$$] handler type == 3 \n" if ($debug) ;
+        if ( !$self->verify_user( $r ) )
             {
-            if ( $self->{ntlmauthoritative} ) 
+            if ( $self->{ntlmauthoritative} )
                 {
                 my $hdr = $r -> err_headers_out ;
                 $hdr -> add ($r->proxyreq ? 'Proxy-Authenticate' : 'WWW-Authenticate', 'NTLM') if ($self -> {authntlm}) ;
                 $hdr -> add ($r->proxyreq ? 'Proxy-Authenticate' : 'WWW-Authenticate', 'Basic realm="' . $self -> {authname} . '"') if ($self -> {authbasic}) ;
-                return AUTH_REQUIRED ;
+		return MP2 ? Apache::HTTP_UNAUTHORIZED : Apache::Constants::HTTP_UNAUTHORIZED ;
                 }
-            else 
+            else
                 {
-                return DECLINED;
+                return MP2 ? Apache::DECLINED : Apache::Constants::DECLINED ;
                 }
             }
         }
@@ -596,8 +632,8 @@ sub handler ($$)
         if (!$nonce) 
             {
             $self -> {lock} = undef ; # reset lock in case anything has gone wrong
-            $r->log_reason("Cannot get nonce for " . $r->uri) ;
-            return SERVER_ERROR ;
+            MP2 ? $r->log_error("Cannot get nonce for " . $r->uri) : $r->log_reason("Cannot get nonce for " . $r->uri) ;
+            return MP2 ? Apache::HTTP_INTERNAL_SERVER_ERROR : Apache::Constants::HTTP_INTERNAL_SERVER_ERROR ;
             }
 
         if (!$self -> verify_user ($r))
@@ -606,53 +642,228 @@ sub handler ($$)
                 {
                 my $hdr = $r -> err_headers_out ;
                 $hdr -> add ($r->proxyreq ? 'Proxy-Authenticate' :'WWW-Authenticate', 'Basic realm="' . $self -> {authname} . '"') if ($self -> {authbasic}) ;
-                return AUTH_REQUIRED ;
+		return MP2 ? Apache::HTTP_UNAUTHORIZED : Apache::Constants::HTTP_UNAUTHORIZED ;
                 }
             else
                 {
-                return DECLINED;
+                return MP2 ? Apache::DECLINED : Apache::Constants::DECLINED ;
                 }
             }
         }
     else
         {
         $self -> {lock} = undef ; # reset lock in case anything has gone wrong
-        $r->log_reason("Bad NTLM Authorization Header type $type for " . $r->uri) ;
-        return AUTH_REQUIRED ;
+        MP2 ? $r->log_error("Bad NTLM Authorization Header type $type for " . $r->uri) : $r->log_reason("Bad NTLM Authorization Header type $type for " . $r->uri) ;
+	return MP2 ? Apache::HTTP_UNAUTHORIZED : Apache::Constants::HTTP_UNAUTHORIZED ;
         }
 
     $self -> {lock} = undef ; # reset lock in case anything has gone wrong
-    $conn -> user($self -> {mappedusername} = $self -> map_user ($r)) ;
+    $r -> user($self -> {mappedusername} = $self -> map_user ($r)) ;
 
     $self->{ok} = 1 ;
 
-    print STDERR "[$$] AuthenNTLM: OK pid = $$, connection = $$conn cuser = " . $conn -> user .
-                     ' ip = ' . $conn -> remote_ip . "\n" if ($debug) ; 
+    print STDERR "[$$] AuthenNTLM: OK pid = $$, connection = $$conn cuser = " . $r -> user .
+                     ' ip = ' . $conn -> remote_ip . "\n" if ($debug) ;
 
-    return OK ;
+    return MP2 ? Apache::OK : Apache::Constants::OK ;
+    }
+
+sub handler2 : method
+   {
+    my ($class, $r) = @_ ;
+    my $type ;
+    my $nonce = '' ;
+    my $self ;
+    my $conn = $r -> connection ;
+    my $connhdr = MP2 ? $r -> headers_in -> {'Connection'} : $r -> header_in ('Connection') ;
+
+    my $fh = select (STDERR) ;
+    $| = 1 ;
+    select ($fh) ;
+
+    if (MP2)
+    {
+    	my $addr = $conn -> remote_addr -> ip_get ;
+    	my $port = $conn -> remote_addr -> port_get ;
+    }
+    else
+    {
+    	my ($addr, $port) = sockaddr_in ($conn -> remote_addr) ;
+    }
+
+    print STDERR "[$$] AuthenNTLM: Start NTLM Authen handler pid = $$, connection = $$conn conn_http_hdr = $connhdr  main = " . ($r -> main) . " cuser = " . $r -> user .
+                    ' remote_ip = ' . $conn -> remote_ip . " remote_port = " . unpack('n', $port) . ' remote_host = <' . $conn -> remote_host . "> version = $VERSION\n" if ($debug) ;
+
+    # we cannot attach our object to the connection record. Since in
+    # Apache 1.3 there is only one connection at a time per process
+    # we can cache our object and check if the connection has changed.
+    # The check is done by slightly changing the remote_host member, which
+    # persists as long as the connection does
+    # This has to be reworked to work with Apache 2.0
+    if (ref ($cache) ne $class || $$conn != $cache -> {connectionid} || $conn -> remote_host ne $cache->{remote_host})
+        {
+	$conn -> remote_host ($conn -> remote_host . ' ') ;
+        $self = {connectionid => $$conn, remote_host => $conn -> remote_host} ;
+        bless $self, $class ;
+	$cache = $self ;
+	print STDERR "[$$] AuthenNTLM: Setup new object\n" if ($debug) ;
+        }
+    else
+        {
+        $self = $cache ;
+	print STDERR "[$$] AuthenNTLM: Object exists user = $self->{userdomain}\\$self->{username}\n" if ($debug) ; 
+	
+	if ($self -> {ok})
+            {
+            $r -> user($self->{mappedusername}) ;
+
+            # we accept the user because we are on the same connection
+            $type = $self -> get_msg ($r);
+            my $content_len = MP2 ? $r->headers_in->{'content-length'} : $r -> header_in('content-length') ;
+            my $method      = $r -> method ;
+            print STDERR "[$$] AuthenNTLM: Same connection pid = $$, connection = $$conn cuser = " .
+                                $r -> user . ' ip = ' . $conn -> remote_ip . ' method = ' . $method . ' Content-Length = ' .
+                                $content_len . ' type = ' . $type . "\n" if ($debug) ;
+
+
+            # IE (5.5, 6.0, probably others) can send a type 1 message 
+            # after authenticating on the same connection.  This is a
+            # problem for POST messages, because IE also sends a
+            # "Content-length: 0" with no POST data.
+            if ($method eq 'GET' || $method eq 'HEAD' || $method eq 'OPTION' || $method eq 'DELETE' ||
+                            $content_len > 0 || $type == 3)
+                {
+                print STDERR "[$$] AuthenNTLM: OK because same connection\n" if ($debug) ;
+                return MP2 ? Apache::OK : Apache::Constants::OK ;
+                }
+
+            }
+        }
+
+    $self -> get_config ($r) ;
+
+    $type = $self -> get_msg ($r) if (!$type) ;
+
+    if (!$type)
+        {
+        $self -> {lock} = undef ; # reset lock in case anything has gone wrong
+        if (!$self->{ntlmauthoritative})
+            { # see if we have any header
+            my $auth_line = MP2 ? $r -> headers_in->{$r->proxyreq ? 'Proxy-Authorization' : 'Authorization'} : $r -> header_in ($r->proxyreq ? 'Proxy-Authorization' : 'Authorization') ;
+            if ($auth_line)
+                {
+                MP2 ? $r->log_error('Bad/Missing NTLM Authorization Header for ' . $r->uri . '; DECLINEing because we are not authoritative' ) : $r->log_reason('Bad/Missing NTLM Authorization Header for ' . $r->uri . '; DECLINEing because we are not authoritative' ) ;
+                return MP2 ? Apache::DECLINED : Apache::Constants::DECLINED ;
+                }
+            }
+
+        MP2 ?  $r->log_error('Bad/Missing NTLM/Basic Authorization Header for ' . $r->uri) : $r->log_reason('Bad/Missing NTLM/Basic Authorization Header for ' . $r->uri) ;
+
+	my $hdr = $r -> err_headers_out ;
+        $hdr -> add ($r->proxyreq ? 'Proxy-Authenticate' : 'WWW-Authenticate', 'NTLM') if ($self -> {authntlm}) ;
+        $hdr -> add ($r->proxyreq ? 'Proxy-Authenticate' : 'WWW-Authenticate', 'Basic realm="' . $self -> {authname} . '"') if ($self -> {authbasic}) ;
+        return MP2 ? Apache::HTTP_UNAUTHORIZED : Apache::Constants::HTTP_UNAUTHORIZED ;
+        }
+
+    if ($type == 1)
+        {
+	my $log = $r->log;
+        my $nonce = $self -> get_nonce ($r) ;
+        if (!$nonce)
+            {
+            $self -> {lock} = undef ; # reset lock in case anything has gone wrong
+            MP2 ?  $r->log_error("Cannot get nonce") : $r->log_reason("Cannot get nonce") if (!defined ($nonce)) ;
+            return $self->{ntlmauthoritative} ? (defined($nonce)) ? (MP2 ? Apache::HTTP_FORBIDDEN : Apache::Constants::HTTP_FORBIDDEN) : (MP2 ? Apache::HTTP_INTERNAL_SERVER_ERROR : Apache::Constants::HTTP_INTERNAL_SERVER_ERROR) : (MP2 ? Apache::DECLINED : Apache::Constants::DECLINED) ;
+	   }
+
+        my $header1 = $self -> set_msg2 ($r, $nonce) ;
+	my $hdr = $r -> err_headers_out ;
+        $hdr -> add ($r->proxyreq ? 'Proxy-Authenticate' : 'WWW-Authenticate', $header1) if ($self -> {authntlm}) ;
+        return MP2 ? Apache::HTTP_UNAUTHORIZED : Apache::Constants::HTTP_UNAUTHORIZED ;
+        }
+    elsif ($type == 3)
+        {
+	print STDERR "[$$] handler type == 3 \n" if ($debug) ;
+        if ( !$self->verify_user( $r ) )
+            {
+            if ( $self->{ntlmauthoritative} )
+                {
+                my $hdr = $r -> err_headers_out ;
+                $hdr -> add ($r->proxyreq ? 'Proxy-Authenticate' : 'WWW-Authenticate', 'NTLM') if ($self -> {authntlm}) ;
+                $hdr -> add ($r->proxyreq ? 'Proxy-Authenticate' : 'WWW-Authenticate', 'Basic realm="' . $self -> {authname} . '"') if ($self -> {authbasic}) ;
+		return MP2 ? Apache::HTTP_UNAUTHORIZED : Apache::Constants::HTTP_UNAUTHORIZED ;
+                }
+            else
+                {
+                return MP2 ? Apache::DECLINED : Apache::Constants::DECLINED ;
+                }
+            }
+        }
+    elsif ($type == -1)
+        {
+        my $nonce = $self -> get_nonce ($r) ;
+        if (!$nonce) 
+            {
+            $self -> {lock} = undef ; # reset lock in case anything has gone wrong
+            MP2 ? $r->log_error("Cannot get nonce for " . $r->uri) : $r->log_reason("Cannot get nonce for " . $r->uri) ;
+            return MP2 ? Apache::HTTP_INTERNAL_SERVER_ERROR : Apache::Constants::HTTP_INTERNAL_SERVER_ERROR ;
+            }
+
+        if (!$self -> verify_user ($r))
+            {
+            if ($self -> {basicauthoritative})
+                {
+                my $hdr = $r -> err_headers_out ;
+                $hdr -> add ($r->proxyreq ? 'Proxy-Authenticate' :'WWW-Authenticate', 'Basic realm="' . $self -> {authname} . '"') if ($self -> {authbasic}) ;
+		return MP2 ? Apache::HTTP_UNAUTHORIZED : Apache::Constants::HTTP_UNAUTHORIZED ;
+                }
+            else
+                {
+                return MP2 ? Apache::DECLINED : Apache::Constants::DECLINED ;
+                }
+            }
+        }
+    else
+        {
+        $self -> {lock} = undef ; # reset lock in case anything has gone wrong
+        MP2 ? $r->log_error("Bad NTLM Authorization Header type $type for " . $r->uri) : $r->log_reason("Bad NTLM Authorization Header type $type for " . $r->uri) ;
+	return MP2 ? Apache::HTTP_UNAUTHORIZED : Apache::Constants::HTTP_UNAUTHORIZED ;
+        }
+
+    $self -> {lock} = undef ; # reset lock in case anything has gone wrong
+    $r -> user($self -> {mappedusername} = $self -> map_user ($r)) ;
+
+    $self->{ok} = 1 ;
+
+    print STDERR "[$$] AuthenNTLM: OK pid = $$, connection = $$conn cuser = " . $r -> user .
+                     ' ip = ' . $conn -> remote_ip . "\n" if ($debug) ;
+
+    return MP2 ? Apache::OK : Apache::Constants::OK ;
     }
 
 
-
-package Apache::AuthenNTLM::Lock ;
-
-use IPC::SysV qw(IPC_CREAT S_IRWXU SEM_UNDO);
-use IPC::Semaphore;
+*handler = MP2 ? \&handler2 : \&handler1;
 
 
-sub lock
+ package Apache::AuthenNTLM::Lock ;
+
+ use IPC::SysV qw(IPC_CREAT S_IRWXU SEM_UNDO);
+ use IPC::Semaphore;
+
+
+ sub lock
     {
     my $class = shift ;
     my $key   = shift ;
     my $debug   = shift ;
 
     my $self = bless {debug => $debug}, $class ;
-    $self->{sem} = new IPC::Semaphore($key, 1, 
+    $self->{sem} = new IPC::Semaphore($key, 1,
             IPC_CREAT | S_IRWXU) or die "Cannot create semaphore with key $key ($!)" ;
 
     $self->{sem}->op(0, 0, SEM_UNDO,
                      0, 1, SEM_UNDO);
-    print STDERR "[$$] AuthenNTLM: enter lock\n" if ($self -> {debug}) ; 
+    print STDERR "[$$] AuthenNTLM: enter lock\n" if ($self -> {debug}) ;
 
     return $self ;
     }
@@ -662,7 +873,7 @@ sub DESTROY
     my $self    = shift;
 
     $self->{sem}->op(0, -1, SEM_UNDO);
-    print STDERR "[$$] AuthenNTLM: leave lock\n" if ($self -> {debug}) ; 
+    print STDERR "[$$] AuthenNTLM: leave lock\n" if ($self -> {debug}) ;
     }
 
 
@@ -693,25 +904,25 @@ Apache::AuthenNTLM - Perform Microsoft NTLM and Basic User Authentication
 
 =head1 DESCRIPTION
 
-The purpose of this module is to perform a user authentication via Mircosofts
+The purpose of this module is to perform a user authentication via Mircosoft's
 NTLM protocol. This protocol is supported by all versions of the Internet
-Explorer and is mainly usefull for intranets. Depending on your preferences
+Explorer and is mainly useful for intranets. Depending on your preferences
 setting IE will supply your windows logon credentials to the web server
 when the server asks for NTLM authentication. This saves the user to type in
 his/her password again.
 
 The NTLM protocol performs a challenge/response to exchange a random number
-(nonce) and get back a md4 hash, which is build form the users password
-and the nonce. This makes sure that no cleartext password goes over the wire.
+(nonce) and get back a md4 hash, which is built from the user's password
+and the nonce. This makes sure that no password goes over the wire in plain text.
 
 The main advantage of the Perl implementaion is, that it can be easily extented
-to verfiy the user/password against other sources than a windows domain controller.
+to verify the user/password against other sources than a windows domain controller.
 The default implementaion is to go to the domain controller for the given domain 
 and verify the user. If you want to verify the user against another source, you
 can inherit from Apache::AuthenNTLM and override it's methods.
 
 To support users that aren't using Internet Explorer, Apache::AuthenNTLM can
-also perform basic authentication depending on it's configuration.
+also perform basic authentication depending on its configuration.
 
 B<IMPORTANT:> NTLM authentification works only when KeepAlive is on. 
 
@@ -742,7 +953,7 @@ use another (Perl-)module to perform authorization.
 
 =head2 PerlAddVar ntdomain "domain pdc bdc"
 
-This is used to create a maping between a domain and a pdc and bdc for
+This is used to create a mapping between a domain and a pdc and bdc for
 that domain. Domain, pdc and bdc must be space separated. You can
 specify mappings for more than one domain.
 
@@ -754,10 +965,10 @@ any information about the domain.
 
 =head2 PerlSetVar fallbackdomain 
 
-fallbackdomain is used in cases there the domain that the user supplied
-isn't configured. This is usefull in enviroments where you have a lot of
+fallbackdomain is used in cases where the domain that the user supplied
+isn't configured. This is useful in enviroments where you have a lot of
 domains, which trust each other, so you can always authenticate against
-a single domain, so you don't need to confirue all domains available in
+a single domain, so you don't need to configure all domains available in
 your network.
 
 =head2 PerlSetVar ntlmauthoritative
@@ -771,14 +982,14 @@ if it fails will give an Authorization Required reply.
 =head2 PerlSetVar basicauthoritative
 
 Setting the ntlmauthoritative directive explicitly to 'off' allows authentication
-to be passed on to lower level modules if AuthenNTLM cannot autheticate the user
+to be passed on to lower level modules if AuthenNTLM cannot authenticate the user
 and the Basic authentication scheme is used.
 If set to 'on', which is the default, AuthenNTLM will try to verify the user and
 if it fails will give an Authorization Required reply. 
 
 =head2 PerlSetVar ntlmsemkey 
 
-There are troubles when two authentication request are takeing place at the same 
+There are troubles when two authentication requests take place at the same 
 time. If the second request starts, before the first request has successfully 
 verified the user to the smb (windows) server, the smb server will terminate the first 
 request. To avoid this Apache::AuthenNTLM serializes all requests. It uses a semaphore
@@ -787,9 +998,9 @@ Set it to zero to turn serialization off.
 
 =head2 PerlSetVar ntlmsemtimout
 
-This set the timeout value used to wait for the semaphore. The defulat is two seconds.
+This set the timeout value used to wait for the semaphore. The default is two seconds.
 It is very small because during the time Apache waits for the semaphore, no other
-authentication request can be send to the windows server. Also Apache::AuthenNTLM
+authentication request can be sent to the windows server. Also Apache::AuthenNTLM
 only asks the windows server once per keep-alive connection, this timeout value
 should be as small as possible.
 
@@ -801,8 +1012,8 @@ Set it to 2 to also see the binary data of the NTLM headers.
 
 =head1 OVERRIDEABLE METHODS
 
-Each of the following methods gets the Apache object as argument. Information
-about the current authetication can be found inside the object Apache::AuthenNTLM 
+Each of the following methods takes the Apache object as argument. Information
+about the current authentication can be found inside the object Apache::AuthenNTLM 
 itself. To override then methods, create our own class which inherits from
 Apache::AuthenNTLM and use it in httpd.conf e.g. 	
 
@@ -818,7 +1029,7 @@ The $r -> dir_config can be used for that purpose.
 
 Will be called to setup the connection to the windows domain controller 
 for $self -> {domain} and retrieve the nonce.
-In case you do not autheticate against a windows machine, you simply need 
+In case you do not authenticate against a windows machine, you simply need 
 to set $self -> {nonce} to a 8 byte random string. Returns undef on error.
 
 =head2 $self -> verify_user ($r)
@@ -862,10 +1073,10 @@ to the request. Default is to return DOMAIN\USERNAME.
 
 =head2 Example for overriding
 
-The following code shows the a basic example for createing a module which
+The following code shows the a basic example for creating a module which
 overrides the map_user method and calls AuthenNTLM's handler only if a
 precondition is met. Note: The functions preconditon_met and lookup_user
-do the real work and not shown here.
+do the real work and are not shown here.
 
 
     package Apache::MyAuthenNTLM ;
@@ -895,6 +1106,7 @@ do the real work and not shown here.
 =head1 AUTHOR
 
 G. Richter (richter@dev.ecos.de)
+Ported by Shannon Eric Peevey (speeves@unt.edu)
 
 Development of this package, versions 0.01-0.13 was sponsored by:
 Siemens: http://www.siemens.com
