@@ -1,3 +1,7 @@
+2.07  07.  May 2004
+   - Fixed a lazy finger mistake on Line 136 :P
+     (Thanks Daniel Roegelein!)
+
 2.06  16.  Feb 2004
    - Added code to remove DOMAIN\\ from windows XP/2003 logins 
      (patch by Michael Zehrer)

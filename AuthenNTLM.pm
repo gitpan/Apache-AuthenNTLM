@@ -19,7 +19,7 @@ package Apache::AuthenNTLM ;
 use strict ;
 use vars qw{$cache $VERSION %msgflags1 %msgflags2 %msgflags3 %invflags1 %invflags2 %invflags3 $addr $port $debug} ;
 
-$VERSION = 2.06 ;
+$VERSION = 2.07 ;
 
 $debug = 0 ;
 
@@ -133,7 +133,7 @@ sub get_config
     $self -> {semkey} = 23754 if (!defined ($self -> {semkey})) ;
     $self -> {semtimeout} = $r -> dir_config ('ntlmsemtimeout') ;
     $self -> {semtimeout} = 2 if (!defined ($self -> {semtimeout})) ;
-    $self -> {splitdomainprefix} = $r -> dir_config ('splitdomainprefix') || '\' ;
+    $self -> {splitdomainprefix} = $r -> dir_config ('splitdomainprefix') || '' ;
 
     if ($debug)
 	{
