@@ -1,3 +1,8 @@
+2.08  04.  Oct 2004
+   - Applied patch from Chris Hughes, which changes the modification
+     of $conn -> remote_host(), (which became read-only in 
+     mod_perl-1.99_15.
+
 2.07  07.  May 2004
    - Fixed a lazy finger mistake on Line 136 :P
      (Thanks Daniel Roegelein!)

@@ -19,7 +19,7 @@ package Apache::AuthenNTLM ;
 use strict ;
 use vars qw{$cache $VERSION %msgflags1 %msgflags2 %msgflags3 %invflags1 %invflags2 %invflags3 $addr $port $debug} ;
 
-$VERSION = 2.07 ;
+$VERSION = 2.08 ;
 
 $debug = 0 ;
 
@@ -188,7 +188,8 @@ sub get_nonce
         {
         eval
             {
-            local $SIG{ALRM} = sub { print STDERR "[$$] AuthenNTLM: timed out while waiting for lock (key = $self->{semkey})\n";  die ; };
+            local $SIG{ALRM} = sub { print STDERR "[$$] AuthenNTLM: timed out" .
+					 "while waiting for lock (key = $self->{semkey})\n";  die ; };
 
             alarm $self -> {semtimeout} ;
             $self -> {lock} = Apache::AuthenNTLM::Lock -> lock ($self->{semkey}, $debug) ;
@@ -202,7 +203,12 @@ sub get_nonce
     
     if (!$self -> {smbhandle})
         {
-        MP2 ?   $r->log_error("Connect to SMB Server failed (pdc = $pdc bdc = $bdc domain = $domain error = ". Authen::Smb::SMBlib_errno . '/' . Authen::Smb::SMBlib_SMB_Error . ") for " . $r -> uri) : $r->log_reason("Connect to SMB Server failed (pdc = $pdc bdc = $bdc domain = $domain error = ". Authen::Smb::SMBlib_errno . '/' . Authen::Smb::SMBlib_SMB_Error . ") for " . $r -> uri) ;
+        MP2 ?   $r->log_error("Connect to SMB Server failed (pdc = $pdc bdc = $bdc domain = $domain error = "
+			      . Authen::Smb::SMBlib_errno . '/' . Authen::Smb::SMBlib_SMB_Error . ") for " . 
+			      $r -> uri) : $r->log_reason("Connect to SMB Server failed (pdc = $pdc bdc = $bdc " .
+							  "domain = $domain error = " . 
+							  Authen::Smb::SMBlib_errno . '/' 
+							  . Authen::Smb::SMBlib_SMB_Error . ") for " . $r -> uri) ;
         return undef ;
         }
 
@@ -533,8 +539,11 @@ sub run
     	my ($addr, $port) = sockaddr_in ($conn -> remote_addr) ;
     }
 
-    print STDERR "[$$] AuthenNTLM: Start NTLM Authen handler pid = $$, connection = $$conn conn_http_hdr = $connhdr  main = " . ($r -> main) . " cuser = " . $r -> user .
-                    ' remote_ip = ' . $conn -> remote_ip . " remote_port = " . unpack('n', $port) . ' remote_host = <' . $conn -> remote_host . "> version = $VERSION\n" if ($debug) ;
+    print STDERR "[$$] AuthenNTLM: Start NTLM Authen handler pid = $$, connection = " .
+	           "$$conn conn_http_hdr = $connhdr  main = " . ($r -> main) . 
+		     " cuser = " . $r -> user . ' remote_ip = ' . $conn -> remote_ip . 
+		       " remote_port = " . unpack('n', $port) . ' remote_host = <' . 
+		         $conn -> remote_host . "> version = $VERSION\n" if ($debug) ;
 
     # we cannot attach our object to the connection record. Since in
     # Apache 1.3 there is only one connection at a time per process
@@ -542,14 +551,37 @@ sub run
     # The check is done by slightly changing the remote_host member, which
     # persists as long as the connection does
     # This has to be reworked to work with Apache 2.0
-    if (ref ($cache) ne $class || $$conn != $cache -> {connectionid} || $conn -> remote_host ne $cache->{remote_host})
-        {
-	$conn -> remote_host ($conn -> remote_host . ' ') ;
-        $self = {connectionid => $$conn, remote_host => $conn -> remote_host} ;
-        bless $self, $class ;
-	$cache = $self ;
-	print STDERR "[$$] AuthenNTLM: Setup new object\n" if ($debug) ;
+#     if (ref ($cache) ne $class || $$conn != $cache -> {connectionid} || $conn -> remote_host ne $cache->{remote_host})
+#         {
+# 	$conn -> remote_host ($conn -> remote_host . ' ') ;
+#         $self = {connectionid => $$conn, remote_host => $conn -> remote_host} ;
+#         bless $self, $class ;
+# 	$cache = $self ;
+# 	print STDERR "[$$] AuthenNTLM: Setup new object\n" if ($debug) ;
+#         }
+
+     my $table;
+     MP2 ? $table = $conn->notes() : $table = $r->notes(); 
+     if (ref ($cache) ne $class || $$conn != $cache->{connectionid} ||
+       (!MP2 && $conn->remote_host ne $cache->{remote_host}) ||
+       (MP2 && $table->get('status') ne "AUTHSTARTED"))
+       {
+         if (!MP2) 
+	 {
+	     $conn->remote_host ($conn->remote_host . ' ');
+	     $self = {connectionid => $$conn, remote_host => $conn -> remote_host} ;
+         } 
+	 elsif (MP2) 
+	 {
+	     my $table = $conn->notes();
+	     $table->add('status','AUTHSTARTED');
+	     $conn->notes($table);
+	     $self = {connectionid => $$conn } ;
         }
+         bless $self, $class ;
+	 $cache = $self ;
+	 print STDERR "[$$] AuthenNTLM: Setup new object\n" if ($debug) ;
+      }
     else
         {
         $self = $cache ;
@@ -564,8 +596,9 @@ sub run
             my $content_len = MP2 ? $r->headers_in->{'content-length'} : $r -> header_in('content-length') ;
             my $method      = $r -> method ;
             print STDERR "[$$] AuthenNTLM: Same connection pid = $$, connection = $$conn cuser = " .
-                                $r -> user . ' ip = ' . $conn -> remote_ip . ' method = ' . $method . ' Content-Length = ' .
-                                $content_len . ' type = ' . $type . "\n" if ($debug) ;
+                                $r -> user . ' ip = ' . $conn -> remote_ip . ' method = ' . 
+				   $method . ' Content-Length = ' .
+                                      $content_len . ' type = ' . $type . "\n" if ($debug) ;
 
 
             # IE (5.5, 6.0, probably others) can send a type 1 message 
@@ -581,6 +614,7 @@ sub run
 
             }
         }
+    # end of if statement
 
     $self -> get_config ($r) ;
 
