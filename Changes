@@ -1,7 +1,15 @@
+2.09  07. Feb 2005
+   - Added notes about KeepAlive Off in httpd.conf file
+   - Added patch from Sergey Svishchev that fixes and issue where
+     each request after the first request on a keep-alive
+     connection used POST data as headers. (Thanks!!)
+   - Added patch that fixed "SMB Server connection not open in 
+     state 3" error with Apache2/mp2. (Big thanks to Dr. Russell Mosemann!)
+
 2.08  04.  Oct 2004
    - Applied patch from Chris Hughes, which changes the modification
      of $conn -> remote_host(), (which became read-only in 
-     mod_perl-1.99_15.
+     mod_perl-1.99_15).
 
 2.07  07.  May 2004
    - Fixed a lazy finger mistake on Line 136 :P

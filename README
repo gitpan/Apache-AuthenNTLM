@@ -69,11 +69,7 @@ For configuration and more information see perldoc Apache::AuthenNTLM
 SUPPORT
 =======
 
-Speeves: Thanks to everyone that is helping to find bugs, etc. in this module.  Please,
-feel free to contact me and let me know of any strange things are going on with
-this module.  Also, please copy the modperl@perl.apache.org mailing list, as
-there are probably many others that are experiencing the same problems as you,
-and they may be able to return an answer faster than I can by myself.  Thanks :)
+Speeves: Thanks to everyone that is helping to find bugs, etc. in this module.  Please, feel free to contact me and let me know of any strange things are going on with this module.  Also, please copy the modperl@perl.apache.org mailing list, as there are probably many others that are experiencing the same problems as you, and they may be able to return an answer faster than I can by myself.  Thanks :)
 
 SEE ALSO
 ========
