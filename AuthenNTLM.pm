@@ -19,7 +19,7 @@ package Apache::AuthenNTLM ;
 use strict ;
 use vars qw{$cache $VERSION %msgflags1 %msgflags2 %msgflags3 %invflags1 %invflags2 %invflags3 $addr $port $debug} ;
 
-$VERSION = 2.01 ;
+$VERSION = 2.03 ;
 
 $debug = 0 ;
 
@@ -195,7 +195,6 @@ sub get_nonce
 
     $self -> {smbhandle} = Authen::Smb::Valid_User_Connect ($pdc, $bdc, $domain, $nonce) ;
 
-    print STDERR "[$$] the \$self->{smbhandle} is $self->{smbhandle}\n";
     if (!$self -> {smbhandle})
         {
         MP2 ?   $r->log_error("Connect to SMB Server failed (pdc = $pdc bdc = $bdc domain = $domain error = ". Authen::Smb::SMBlib_errno . '/' . Authen::Smb::SMBlib_SMB_Error . ") for " . $r -> uri) : $r->log_reason("Connect to SMB Server faild (pdc = $pdc bdc = $bdc domain = $domain error = ". Authen::Smb::SMBlib_errno . '/' . Authen::Smb::SMBlib_SMB_Error . ") for " . $r -> uri) ;
@@ -594,7 +593,6 @@ sub handler1 ($$) {
 
     if ($type == 1)
         {
-	my $log = $r->log;
         my $nonce = $self -> get_nonce ($r) ;
         if (!$nonce)
             {
@@ -767,7 +765,6 @@ sub handler2 : method
 
     if ($type == 1)
         {
-	my $log = $r->log;
         my $nonce = $self -> get_nonce ($r) ;
         if (!$nonce)
             {
@@ -904,7 +901,7 @@ Apache::AuthenNTLM - Perform Microsoft NTLM and Basic User Authentication
 
 =head1 DESCRIPTION
 
-The purpose of this module is to perform a user authentication via Mircosoft's
+The purpose of this module is to perform a user authentication via Microsoft's
 NTLM protocol. This protocol is supported by all versions of the Internet
 Explorer and is mainly useful for intranets. Depending on your preferences
 setting IE will supply your windows logon credentials to the web server

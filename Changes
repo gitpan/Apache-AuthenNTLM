@@ -1,4 +1,11 @@
 
+2.03  24. Jul 2003
+   - removed port debugging line that was causing irritation
+   - fixed apt misspelling of Microsoft
+
+2.02  23. Jul 2003
+   - removed r->log line that was killing the handler
+
 2.01  22. Jul 2003
    
    - Ported to work with both versions of modperl
