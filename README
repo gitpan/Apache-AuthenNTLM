@@ -12,7 +12,7 @@ THIS PACKAGE IS PROVIDED "AS IS" AND WITHOUT ANY EXPRESS OR IMPLIED
 WARRANTIES, INCLUDING, WITHOUT LIMITATION, THE IMPLIED WARRANTIES OF 
 MERCHANTIBILITY AND FITNESS FOR A PARTICULAR PURPOSE.
 
-$Id: README,v 1.3 2002/01/08 11:28:11 richter Exp $
+$Id: README,v 1.4 2002/04/10 03:39:05 richter Exp $
 
 
 OVERVIEW
@@ -35,6 +35,11 @@ Some information about NTLM can be found at
 
 http://msdn.microsoft.com/library/default.asp?url=/library/en-us/security/ntlmssp_0k19.asp
 http://msdn.microsoft.com/library/default.asp?url=/library/en-us/vcsample98/samp/VC98/sdk/winbase/security/winnt/httpauth/httpauth.asp
+
+More detailed implementation details are available from
+
+http://www.opengroup.org/comsource/techref2/NCH1222X.HTM
+http://www.innovation.ch/java/ntlm.html
 
 A lot of ideas and information are taken from the similar Apache module mod_ntlm,
 which can be found at http://sourceforge.net/projects/modntlm/ 

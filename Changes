@@ -1,3 +1,9 @@
+ 0.15  9. Apr 2002
+
+   - Added patch from Brian Paulsen which causes correct handling of
+     non unicode charset (needed for some versions of win9x) and
+     more verbose debugging output (decoded flags)
+
  0.14  26. Feb 2002
 
    - fixed a problem that page content of Perl sometimes goes to the

@@ -10,7 +10,7 @@
 #   IMPLIED WARRANTIES, INCLUDING, WITHOUT LIMITATION, THE IMPLIED
 #   WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR A PARTICULAR PURPOSE.
 #
-#   $Id: AuthenNTLM.pm,v 1.11 2002/02/26 11:07:14 richter Exp $
+#   $Id: AuthenNTLM.pm,v 1.13 2002/04/09 06:52:38 richter Exp $
 #
 ###################################################################################
 
@@ -18,9 +18,9 @@
 package Apache::AuthenNTLM ;
 
 use strict ;
-use vars qw{$cache $VERSION} ;
+use vars qw{$cache $VERSION %msgflags1 %msgflags2 %msgflags3 %invflags1 %invflags2 %invflags3} ;
 
-$VERSION = 0.14 ;
+$VERSION = 0.15 ;
 
 my $debug = 0 ;
 
@@ -33,7 +33,39 @@ use Authen::Smb 0.92 ;
 #use Digest::MD4 ;
 use Apache::Constants qw(:common);
 
+%msgflags1 = ( 0x01 => "NEGOTIATE_UNICODE",
+       0x02 => "NEGOTIATE_OEM",
+       0x04 => "REQUEST_TARGET",
+       0x10 => "NEGOTIATE_SIGN",
+       0x20 => "NEGOTIATE_SEAL",
+       0x80 => "NEGOTAITE_LM_KEY",
+     );
 
+%msgflags2 = ( 0x02 => "NEGOTIATE_NTLM",
+       0x40 => "NEGOTIATE_LOCAL_CALL",
+       0x80 => "NEGOTIATE_ALWAYS_SIGN",
+     );
+
+%msgflags3 = ( 0x01 => "TARGET_TYPE_DOMAIN",
+       0x02 => "TARGET_TYPE_SERVER",
+     );
+
+%invflags1 = ( "NEGOTIATE_UNICODE" => 0x01,
+       "NEGOTIATE_OEM"     => 0x02,
+       "REQUEST_TARGET"    => 0x04,
+       "NEGOTIATE_SIGN"    => 0x10,
+       "NEGOTIATE_SEAL"    => 0x20,
+       "NEGOTAITE_LM_KEY"  => 0x80,
+     );
+
+%invflags2 = ( "NEGOTIATE_NTLM"        => 0x02,
+       "NEGOTIATE_LOCAL_CALL"  => 0x40,
+       "NEGOTIATE_ALWAYS_SIGN" => 0x80,
+     );
+
+%invflags3 = ( "TARGET_TYPE_DOMAIN" => 0x01,
+       "TARGET_TYPE_SERVER" => 0x02,
+     );
 
 sub get_config
 
@@ -42,7 +74,7 @@ sub get_config
 
     return if ($self -> {smbpdc}) ; # config already setup
 
-	$debug = $r -> dir_config ('ntlmdebug') || 0 ;
+    $debug = $r -> dir_config ('ntlmdebug') || 0 ;
     $debug = $self -> {debug} = lc($debug) eq 'on' || $debug == 1?1:0 ;
 
     my @config = $r -> dir_config -> get ('ntdomain') ;
@@ -56,26 +88,26 @@ sub get_config
         print STDERR "AuthenNTLM: Config Domain = $domain  pdc = $pdc  bdc = $bdc\n" if ($debug) ; 
         }
 
-	$self -> {defaultdomain} = $r -> dir_config ('defaultdomain') || '' ;
-	$self -> {authtype} = $r -> auth_type || 'ntlm,basic' ;
-	$self -> {authname} = $r -> auth_name || ''  ;
+    $self -> {defaultdomain} = $r -> dir_config ('defaultdomain') || '' ;
+    $self -> {authtype} = $r -> auth_type || 'ntlm,basic' ;
+    $self -> {authname} = $r -> auth_name || ''  ;
     my $autho = $r -> dir_config ('ntlmauthoritative') || 'on' ;
     $self -> {ntlmauthoritative} = lc($autho) eq 'on' || $autho == 1?1:0 ;
     $autho = $r -> dir_config ('basicauthoritative') || 'on' ;
     $self -> {basicauthoritative} = lc($autho) eq 'on' || $autho == 1?1:0 ;
 	
-	$self -> {authntlm} = 0 ;
-	$self -> {authbasic} = 0 ;
+    $self -> {authntlm} = 0 ;
+    $self -> {authbasic} = 0 ;
 
-	$self -> {authntlm} = 1 if ($self -> {authtype} =~ /(^|,)ntlm($|,)/i) ;
-	$self -> {authbasic} = 1 if ($self -> {authtype} =~ /(^|,)basic($|,)/i) ;
+    $self -> {authntlm} = 1 if ($self -> {authtype} =~ /(^|,)ntlm($|,)/i) ;
+    $self -> {authbasic} = 1 if ($self -> {authtype} =~ /(^|,)basic($|,)/i) ;
     if ($debug)
-		{
-		print STDERR "AuthenNTLM: Config Default Domain = $self->{defaultdomain}\n"  ; 
-		print STDERR "AuthenNTLM: Config AuthType = $self->{authtype} AuthName = $self->{authname}\n"  ; 
-		print STDERR "AuthenNTLM: Config Auth NTLM = $self->{authntlm} Auth Basic = $self->{authbasic}\n"  ; 
-		print STDERR "AuthenNTLM: Config NTLMAuthoritative = ",  $self -> {ntlmauthoritative}?'on':'off', "  BasicAuthoritative = ",  $self -> {basicauthoritative}?'on':'off', "\n"  ; 
-		}
+	{
+	print STDERR "AuthenNTLM: Config Default Domain = $self->{defaultdomain}\n"  ; 
+	print STDERR "AuthenNTLM: Config AuthType = $self->{authtype} AuthName = $self->{authname}\n"  ; 
+	print STDERR "AuthenNTLM: Config Auth NTLM = $self->{authntlm} Auth Basic = $self->{authbasic}\n"  ; 
+	print STDERR "AuthenNTLM: Config NTLMAuthoritative = ",  $self -> {ntlmauthoritative}?'on':'off', "  BasicAuthoritative = ",  $self -> {basicauthoritative}?'on':'off', "\n"  ; 
+	}
     }
 
 
@@ -85,7 +117,7 @@ sub get_nonce
     my ($self, $r) = @_ ;
 
     # reuse connection if possible
-	return $self -> {nonce} if ($self -> {nonce} && $self -> {smbhandle}) ;
+    return $self -> {nonce} if ($self -> {nonce} && $self -> {smbhandle}) ;
 
     my $nonce = '12345678' ;
     my $domain  = lc ($self -> {domain}) ;
@@ -120,17 +152,17 @@ sub verify_user
         return ;
         }
 
-	my $rc ;
+    my $rc ;
 
     print STDERR "AuthenNTLM: Verify user $self->{username} via smb server\n" if ($debug) ;
-	if ($self -> {basic})
-		{
-		$rc = Authen::Smb::Valid_User_Auth ($self -> {smbhandle}, $self->{username}, $self -> {password}) ;
-		}
-	else
-		{
-		$rc = Authen::Smb::Valid_User_Auth ($self -> {smbhandle}, $self->{username}, $self -> {usernthash}, 1, $self->{userdomain}) ;
-		}
+    if ($self -> {basic})
+	{
+	$rc = Authen::Smb::Valid_User_Auth ($self -> {smbhandle}, $self->{username}, $self -> {password}) ;
+	}
+    else
+	{
+	$rc = Authen::Smb::Valid_User_Auth ($self -> {smbhandle}, $self->{username}, $self -> {usernthash}, 1, $self->{userdomain}) ;
+	}
 
     if ($rc == &Authen::Smb::NTV_LOGON_ERROR)
         {
@@ -183,22 +215,22 @@ sub get_msg_data
     my $auth_line = $r -> header_in ($r->proxyreq ? 'Proxy-Authorization'
                                     : 'Authorization') ;
 
-	$self -> {ntlm}  = 0 ;
-	$self -> {basic} = 0 ;
+    $self -> {ntlm}  = 0 ;
+    $self -> {basic} = 0 ;
 
     print STDERR "AuthenNTLM: Authorization Header ", defined($auth_line)?$auth_line:'<not given>', "\n" if ($debug) ;
     if ($self -> {authntlm} && ($auth_line =~ /^NTLM\s+(.*?)$/i)) 
-		{
-		$self -> {ntlm} = 1 ;
-		}
-	elsif ($self -> {authbasic} && ($auth_line =~ /^Basic\s+(.*?)$/i)) 
-		{
-		$self -> {basic}  = 1 ;
-		}
-	else
-		{
-		return undef ;
-		}
+	{
+	$self -> {ntlm} = 1 ;
+	}
+    elsif ($self -> {authbasic} && ($auth_line =~ /^Basic\s+(.*?)$/i)) 
+	{
+	$self -> {basic}  = 1 ;
+	}
+    else
+	{
+	return undef ;
+	}
 
     my $data = MIME::Base64::decode($1) ;
 
@@ -226,18 +258,18 @@ sub get_msg
     my $data = $self -> get_msg_data ($r) ;
     return undef if (!$data) ;
 
-	if ($self -> {ntlm})
-		{
-		my ($protocol, $type) = unpack ('Z8C', $data) ;
-		return $self -> get_msg1 ($r, $data) if ($type == 1) ;
-		return $self -> get_msg3 ($r, $data) if ($type == 3) ;
-		return $type ;
-		}
-	elsif ($self -> {basic})
-		{
-		return $self -> get_basic ($r, $data) ;
-		}
-	return undef ;
+    if ($self -> {ntlm})
+        {
+        my ($protocol, $type) = unpack ('Z8C', $data) ;
+        return $self -> get_msg1 ($r, $data) if ($type == 1) ;
+        return $self -> get_msg3 ($r, $data) if ($type == 3) ;
+        return $type ;
+        }
+    elsif ($self -> {basic})
+        {
+        return $self -> get_basic ($r, $data) ;
+        }
+    return undef ;
     }
 
 
@@ -254,9 +286,25 @@ sub get_msg1
     $self -> {domain} = $dom_len?$domain:$self -> {defaultdomain} ;
     $self -> {host}   = $host_len?$host:'' ;
 
+    $self -> {accept_unicode} = $flags1 & 0x01;
+
     if ($debug)
         {
-        print STDERR "AuthenNTLM: protocol=$protocol, type=$type, flags1=$flags1, flags2=$flags2, domain length=$dom_len, domain offset=$dom_off, host length=$host_len, host offeset=$host_off, host=$host, domain=$domain\n" ;
+        my @flag1str;
+        foreach my $i ( sort keys %msgflags1 ) 
+            {
+            push @flag1str, $msgflags1{ $i } if $flags1 & $i;
+            }
+        my $flag1str = join( ",", @flag1str );
+
+        my @flag2str;
+        foreach my $i ( sort keys %msgflags2 ) 
+            {
+            push @flag2str, $msgflags2{ $i } if $flags2 & $i;
+            }
+            my $flag2str = join( ",", @flag2str );
+    
+        print STDERR "AuthenNTLM: protocol=$protocol, type=$type, flags1=$flags1($flag1str), flags2=$flags2($flag2str), domain length=$dom_len, domain offset=$dom_off, host length=$host_len, host offset=$host_off, host=$host, domain=$domain\n" ;
         }
 
 
@@ -269,7 +317,11 @@ sub set_msg2
     {
     my ($self, $r, $nonce) = @_ ;
 
-    my $data = pack ('Z8Ca7vvCCa2a8a8', 'NTLMSSP', 2, '', 40, 0, 1, 0x82, '', $nonce, '') ;
+    my $charencoding = $self->{ accept_unicode } ? $invflags1{ NEGOTIATE_UNICODE } : $invflags1{ NEGOTIATE_OEM };
+
+    my $flags2 = $invflags2{ NEGOTIATE_ALWAYS_SIGN } | $invflags2{ NEGOTIATE_NTLM };
+
+    my $data = pack ('Z8Ca7vvCCa2a8a8', 'NTLMSSP', 2, '', 40, 0, $charencoding,  $flags2, '', $nonce, '') ;
 
     my $header = 'NTLM '. MIME::Base64::encode($data, '') ;
     $r->err_header_out ($r->proxyreq ? 'Proxy-Authenticate' : 'WWW-Authenticate', $header) ;
@@ -282,7 +334,9 @@ sub set_msg2
             printf STDERR "%x ", unpack('C', substr($data, $i, 1)) ;
             }
         print STDERR "\n" ;
-        print STDERR "AuthenNTLM: nonce=$nonce\n" ;
+        print STDERR "AuthenNTLM: charencoding = $charencoding\n";
+        print STDERR "AuthenNTLM: flags2 = $flags2\n";
+        print STDERR "AuthenNTLM: nonce=$nonce\n" if $debug > 1;
         print STDERR "AuthenNTLM: Send header: $header\n" ;
         }
 
@@ -294,19 +348,24 @@ sub get_msg3
     {
     my ($self, $r, $data) = @_ ;
 
-    my ($protocol, $type, $zero, $lm_len,  $l1, $lm_off, $l2, $nt_len,   $l3, $nt_off, $l4, 
-                                 $dom_len, $x1, $dom_off, $x2, $user_len, $x3, $user_off, $x4,
-                                 $host_len, $x5, $host_off, $x6, $msg_len, $x7) = unpack ('Z8Ca3v22', $data) ;
+    my ($protocol, $type, $zero, 
+        $lm_len,  $l1, $lm_off,
+        $nt_len,   $l3, $nt_off,
+        $dom_len, $x1, $dom_off,
+        $user_len, $x3, $user_off,
+        $host_len, $x5, $host_off,
+        $msg_len
+        ) = unpack ('Z8Ca3vvVvvVvvVvvVvvVv', $data) ;
     
     my $lm     = $lm_off  ?substr ($data, $lm_off,   $lm_len):'' ;
     my $nt     = $nt_off  ?substr ($data, $nt_off,   $nt_len):'' ;
-    my $user   = $user_off?substr_unicode ($data, $user_off, $user_len):'' ;
-    my $host   = $host_off?substr_unicode ($data, $host_off, $host_len):'' ;
-    my $domain = $dom_off ?substr_unicode ($data, $dom_off,  $dom_len):'' ;
+    my $user   = $user_off? ($self->{accept_unicode} ? substr_unicode ($data, $user_off, $user_len) : substr( $data, $user_off, $user_len ) ) :'' ;
+    my $host   = $host_off? ($self->{accept_unicode} ? substr_unicode ($data, $host_off, $host_len) : substr( $data, $host_off, $host_len ) ) :'' ;
+    my $domain = $dom_off ? ($self->{accept_unicode} ? substr_unicode ($data, $dom_off,  $dom_len) : substr( $data, $dom_off, $dom_len ) ) :'' ;
 
     $self -> {userdomain} = $dom_len?$domain:$self -> {defaultdomain} ;
     $self -> {username}   = $user ;
-    $self -> {usernthash} = $nt ;
+    $self -> {usernthash} = $nt_len ? $nt : $lm;
 
     if ($debug)
         {
@@ -324,16 +383,16 @@ sub get_basic
 
     ($self -> {username}, $self -> {password}) = split (/:/, $data)  ;
 
-	my ($domain, $username) = split (/\\|\//, $self -> {username}) ;
-	if ($username)
-		{
-		$self -> {domain} = $domain ;
-		$self -> {username} = $username ;
-		}
-	else
-		{
-		$self -> {domain} = $self -> {defaultdomain} ;
-		}
+    my ($domain, $username) = split (/\\|\//, $self -> {username}) ;
+    if ($username)
+	{
+	$self -> {domain} = $domain ;
+	$self -> {username} = $username ;
+	}
+    else
+	{
+	$self -> {domain} = $self -> {defaultdomain} ;
+	}
 
     $self -> {userdomain} = $self -> {domain} ; 
 
@@ -348,11 +407,11 @@ sub get_basic
 
 sub DESTROY
 
-	{
+    {
     my ($self) = @_ ;
 
     Authen::Smb::Valid_User_Disconnect ($self -> {smbhandle}) if ($self -> {smbhandle}) ;
-	}
+    }
 
 
 
@@ -371,32 +430,32 @@ sub handler ($$)
     print STDERR "AuthenNTLM: Start NTLM Authen handler pid = $$, connection = $$conn cuser = ", $conn -> user, ' ip = ', $conn -> remote_ip, ' remote_host = <', $conn -> remote_host, ">\n" if ($debug) ; 
     
     # we cannot attach our object to the connection record. Since in
-	# Apache 1.3 there is only one connection at a time per process
-	# we can cache our object and check if the connection has changed.
-	# The check is done by slightly changing the remote_host member, which 
-	# persists as long as the connection does
-	# This has to be reworked to work with Apache 2.0
-	if (ref ($cache) ne $class || $$conn != $cache -> {connectionid} || $conn -> remote_host ne $cache->{remote_host})
+    # Apache 1.3 there is only one connection at a time per process
+    # we can cache our object and check if the connection has changed.
+    # The check is done by slightly changing the remote_host member, which 
+    # persists as long as the connection does
+    # This has to be reworked to work with Apache 2.0
+    if (ref ($cache) ne $class || $$conn != $cache -> {connectionid} || $conn -> remote_host ne $cache->{remote_host})
         {
-		$conn -> remote_host ($conn -> remote_host . ' ') ;
+	$conn -> remote_host ($conn -> remote_host . ' ') ;
         $self = {connectionid => $$conn, remote_host => $conn -> remote_host} ;
         bless $self, $class ;
-		$cache = $self ;
-		print STDERR "AuthenNTLM: Setup new object\n" if ($debug) ; 
+	$cache = $self ;
+	print STDERR "AuthenNTLM: Setup new object\n" if ($debug) ; 
         }
     else
         {
         $self = $cache ;
-		print STDERR "AuthenNTLM: Object exists user = $self->{userdomain}\\$self->{username}\n" if ($debug) ; 
-		
-		if ($self -> {ok})
-			{
-			$conn -> user($self->{mappedusername}) ;
-			
-			# we accecpt the user because we are on the same connection
-			print STDERR "AuthenNTLM: OK because same connection pid = $$, connection = $$conn cuser = ", $conn -> user, ' ip = ', $conn -> remote_ip, "\n" if ($debug) ; 
-			return OK ;
-			}
+	print STDERR "AuthenNTLM: Object exists user = $self->{userdomain}\\$self->{username}\n" if ($debug) ; 
+	
+	if ($self -> {ok})
+            {
+            $conn -> user($self->{mappedusername}) ;
+
+            # we accecpt the user because we are on the same connection
+            print STDERR "AuthenNTLM: OK because same connection pid = $$, connection = $$conn cuser = ", $conn -> user, ' ip = ', $conn -> remote_ip, "\n" if ($debug) ; 
+            return OK ;
+            }
         }
 
     $self -> get_config ($r) ;
@@ -406,7 +465,7 @@ sub handler ($$)
         {
         $r->log_reason('Bad/Missing NTLM/Basic Authorization Header for ' . $r->uri) ;
         
-		my $hdr = $r -> err_headers_out ;
+	my $hdr = $r -> err_headers_out ;
         $hdr -> add ($r->proxyreq ? 'Proxy-Authenticate' : 'WWW-Authenticate', 'NTLM') if ($self -> {authntlm}) ;
         $hdr -> add ($r->proxyreq ? 'Proxy-Authenticate' : 'WWW-Authenticate', 'Basic realm="' . $self -> {authname} . '"') if ($self -> {authntlm}) ;
         return AUTH_REQUIRED ;
@@ -426,7 +485,20 @@ sub handler ($$)
         }
     elsif ($type == 3)
         {
-        return $self -> {ntlmauthoritative}?AUTH_REQUIRED:DECLINED if (!$self -> verify_user ($r)) ;
+        if ( !$self->verify_user( $r ) ) 
+            {
+            if ( $self->{ntlmauthoritative} ) 
+                {
+                my $hdr = $r -> err_headers_out ;
+                $hdr -> add ($r->proxyreq ? 'Proxy-Authenticate' : 'WWW-Authenticate', 'NTLM') if ($self -> {authntlm}) ;
+                $hdr -> add ($r->proxyreq ? 'Proxy-Authenticate' : 'WWW-Authenticate', 'Basic realm="' . $self -> {authname} . '"') if ($self -> {authntlm}) ;
+                return AUTH_REQUIRED ;
+                }
+            else 
+                {
+                return DECLINED;
+                }
+            }
         }
     elsif ($type == -1)
         {
@@ -444,9 +516,9 @@ sub handler ($$)
         return AUTH_REQUIRED ;
         }
 
-	$conn -> user($self -> {mappedusername} = $self -> map_user ($r)) ;
+    $conn -> user($self -> {mappedusername} = $self -> map_user ($r)) ;
 
-	$self->{ok} = 1 ;
+    $self->{ok} = 1 ;
 
     print STDERR "AuthenNTLM: OK pid = $$, connection = $$conn cuser = ", $conn -> user, ' ip = ', $conn -> remote_ip, "\n" if ($debug) ; 
 
@@ -499,6 +571,9 @@ can inherit from Apache::AuthenNTLM and override it's methods.
 
 To support users that aren't using Internet Explorer, Apache::AuthenNTLM can
 also perform basic authentication depending on it's configuration.
+
+B<IMPORTANT:> NTLM authentification works only when KeepAlive is on. 
+
 
 =head1 CONFIGURATION
 
