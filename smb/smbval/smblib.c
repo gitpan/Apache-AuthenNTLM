@@ -111,7 +111,7 @@ SMB_Handle_Type SMB_Connect_Server(SMB_Handle_Type Con_Handle,
 				   char *server, char *NTdomain)
 
 { SMB_Handle_Type con;
-  char temp[80], called[80], calling[80], *address;
+  char temp[80], called[80], calling[100], *address, buf [20];
   int i;
 
   /* Get a connection structure if one does not exist */
@@ -150,8 +150,9 @@ SMB_Handle_Type SMB_Connect_Server(SMB_Handle_Type Con_Handle,
 
   con -> pid = getpid();
   con -> mid = con -> pid;      /* This will do for now ... */
-  con -> uid = 0;               /* Until we have done a logon, no uid ... */ 
+  con -> uid = 0;               /* Until we have done a logon, no uid */
   con -> gid = getgid();
+
 
   /* Now connect to the remote end, but first upper case the name of the
      service we are going to call, sine some servers want it in uppercase */
@@ -273,6 +274,7 @@ SMB_Handle_Type SMB_Connect(SMB_Handle_Type Con_Handle,
   else
     address = con -> address;
 
+  
   con -> Trans_Connect = RFCNB_Call(called,
 				    calling,
 				    address, /* Protocol specific */
@@ -387,7 +389,7 @@ int SMB_Logon_Server(SMB_Handle_Type Con_Handle, char *UserName,
 
     SSVAL(SMB_Hdr(pkt), SMB_ssetpLM_mbs_offset, SMBLIB_MAX_XMIT);
     SSVAL(SMB_Hdr(pkt), SMB_ssetpLM_mmc_offset, 2);
-    SSVAL(SMB_Hdr(pkt), SMB_ssetpLM_vcn_offset, Con_Handle -> pid);
+    SSVAL(SMB_Hdr(pkt), SMB_ssetpLM_vcn_offset, 1); /* must be one, otherwise server will close all other connections!!! */
     SIVAL(SMB_Hdr(pkt), SMB_ssetpLM_snk_offset, 0);
     SSVAL(SMB_Hdr(pkt), SMB_ssetpLM_pwl_offset, pass_len + 1);
     SIVAL(SMB_Hdr(pkt), SMB_ssetpLM_res_offset, 0);
@@ -451,8 +453,8 @@ int SMB_Logon_Server(SMB_Handle_Type Con_Handle, char *UserName,
     SSVAL(SMB_Hdr(pkt), SMB_hdr_axo_offset, 0);
 
     SSVAL(SMB_Hdr(pkt), SMB_ssetpNTLM_mbs_offset, SMBLIB_MAX_XMIT);
-    SSVAL(SMB_Hdr(pkt), SMB_ssetpNTLM_mmc_offset, 0);
-    SSVAL(SMB_Hdr(pkt), SMB_ssetpNTLM_vcn_offset, 0);
+    SSVAL(SMB_Hdr(pkt), SMB_ssetpNTLM_mmc_offset, 2);
+    SSVAL(SMB_Hdr(pkt), SMB_ssetpNTLM_vcn_offset, 1); /* must be one, otherwise server will close all other connections!!! */
     SIVAL(SMB_Hdr(pkt), SMB_ssetpNTLM_snk_offset, 0);
     SSVAL(SMB_Hdr(pkt), SMB_ssetpNTLM_cipl_offset, pass_len);
     SSVAL(SMB_Hdr(pkt), SMB_ssetpNTLM_cspl_offset, 0);
@@ -536,6 +538,15 @@ int SMB_Logon_Server(SMB_Handle_Type Con_Handle, char *UserName,
     return(SMBlibE_BAD);
 
   }
+
+  if (SVAL(SMB_Hdr(pkt), SMB_ssetpr_act_offset) & 0x1)
+        {
+        /* do we allow guest login? NO! */
+        RFCNB_Free_Pkt(pkt);
+        SMBlib_errno = SMBlibE_GuestOnly ;
+        return(SMBlibE_BAD);                        
+        }
+                                                      
 
 #ifdef DEBUG
   fprintf(stderr, "SessSetupAndX response. Action = %i\n", 

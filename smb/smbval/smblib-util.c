@@ -24,7 +24,11 @@
 */
 
 #include "smblib-priv.h"
+#ifdef __FreeBSD__
+#include <stdlib.h>
+#else
 #include <malloc.h>
+#endif
 
 #include "rfcnb.h"
 
@@ -591,8 +595,8 @@ SMB_Tree_Handle SMB_TreeConnect(SMB_Handle_Type Con_Handle,
 
   if (Con_Handle -> first_tree == NULL) {
 
-    Con_Handle -> first_tree == tree;
-    Con_Handle -> last_tree == tree;
+    Con_Handle -> first_tree = tree;
+    Con_Handle -> last_tree = tree;
 
   }
   else {

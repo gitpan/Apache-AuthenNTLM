@@ -4,7 +4,12 @@ extern "C" {
 #include "EXTERN.h"
 #include "perl.h"
 #include "XSUB.h"
+
+#undef TRUE
+#undef FALSE
+
 #include "smbval/valid.h"
+#include "smbval/smblib-priv.h"
 #ifdef __cplusplus
 }
 #endif
@@ -136,8 +141,13 @@ Valid_User_Connect(server,backup,domain,nonce)
     char *backup
     char *domain
     char *nonce
+CODE:
+    if (!SvPOK (ST(3)) || SvCUR(ST(3)) < 8)
+        croak ("nonce muist be preallocated with an 8 character string") ;
+
+    RETVAL = Valid_User_Connect(server, backup, domain, nonce);
 OUTPUT:
-    nonce
+    RETVAL
 
 
 
@@ -153,3 +163,19 @@ Valid_User_Auth(handle,username,password,precrypt=0,domain="")
 void 
 Valid_User_Disconnect(handle)
     void *handle
+
+
+int 
+SMBlib_errno()
+CODE:
+        RETVAL = SMBlib_errno ;
+OUTPUT:
+        RETVAL
+
+
+int
+SMBlib_SMB_Error()
+CODE:
+        RETVAL = SMBlib_SMB_Error ;
+OUTPUT:
+        RETVAL

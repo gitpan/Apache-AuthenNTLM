@@ -22,8 +22,11 @@
    along with this program; if not, write to the Free Software
    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
 */
-
+#ifdef __FreeBSD__
+#include <stdlib.h>
+#else
 #include <malloc.h>
+#endif
 #include <string.h>
 
 int RFCNB_errno = 0;
@@ -282,9 +285,18 @@ int RFCNB_Recv(void *con_Handle, struct RFCNB_Pkt *Data, int Length)
 int RFCNB_Hangup(struct RFCNB_Con *con_Handle)
 
 {
+  struct redirect_addr *redir_addr,*next;
 
   if (con_Handle != NULL) {
     RFCNB_Close(con_Handle -> fd);  /* Could this fail? */
+    if (con_Handle -> redirect_list != NULL)
+    {
+	do { 
+		redir_addr = con_Handle->redirect_list;
+		next = redir_addr->next;
+		free(redir_addr);
+	} while(next!=NULL);
+	}
     free(con_Handle);
   }
 

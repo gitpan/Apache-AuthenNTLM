@@ -95,3 +95,6 @@ void *SMB_Logon_And_TCon(void *con, void *tree, char *user, char *pass,
 			 char *service, char *st);
 
 #define SMBLIB_DEFAULT_DOMAIN "anydom"
+
+
+extern int SMBlib_errno;

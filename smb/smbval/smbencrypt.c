@@ -20,11 +20,14 @@
    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
 */
 
+#include <stdlib.h>
 #include <string.h>
 #include <arpa/inet.h>
 #include <dirent.h>
 #include <string.h>
+#ifdef HAVE_SYS_VFS_H
 #include <sys/vfs.h>
+#endif
 #include <netinet/in.h>
 #include <ctype.h>
 #include "smblib-priv.h"

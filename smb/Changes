@@ -55,4 +55,6 @@ Revision history for Perl extension Authen::Smb.
 0.92 Jan 4 2002
     - Added functions for Apache::AuthenNTLM (Gerald Richter)
 
-
+0.93-0.96 Seg 3 2002
+    - updated smbval, fixed bugs in smbval VC count handling,
+      fixed bug in nonce passing

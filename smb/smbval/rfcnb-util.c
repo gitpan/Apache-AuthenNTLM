@@ -24,7 +24,11 @@
 */
 
 #include <string.h>
+#ifdef __FreeBSD__
+#include <stdlib.h>
+#else
 #include <malloc.h>
+#endif
 #include <arpa/inet.h>
 
 #include "std-includes.h"
@@ -433,15 +437,23 @@ int RFCNB_Session_Req(struct RFCNB_Con *con,
   }
 
   sess_pkt = pkt -> data;    /* Get pointer to packet proper */
+  memset (sess_pkt, 0, RFCNB_Pkt_Sess_Len) ;
+  
+
 
   sess_pkt[RFCNB_Pkt_Type_Offset]  = RFCNB_SESSION_REQUEST;
-  RFCNB_Put_Pkt_Len(sess_pkt, RFCNB_Pkt_Sess_Len-RFCNB_Pkt_Hdr_Len);
+  RFCNB_Put_Pkt_Len(sess_pkt, (RFCNB_Pkt_Sess_Len-RFCNB_Pkt_Hdr_Len));
   sess_pkt[RFCNB_Pkt_N1Len_Offset] = 32;
   sess_pkt[RFCNB_Pkt_N2Len_Offset] = 32;
 
   RFCNB_CvtPad_Name(Called_Name, (sess_pkt + RFCNB_Pkt_Called_Offset));
   RFCNB_CvtPad_Name(Calling_Name, (sess_pkt + RFCNB_Pkt_Calling_Offset));
 
+  /* this magic AA marks the calling name as workstation (gr) */
+  sess_pkt[RFCNB_Pkt_Calling_Offset+30] = 'A' ;
+  sess_pkt[RFCNB_Pkt_Calling_Offset+31] = 'A' ;
+  
+  
   /* Now send the packet */
 
 #ifdef RFCNB_DEBUG
@@ -451,7 +463,7 @@ int RFCNB_Session_Req(struct RFCNB_Con *con,
 #endif
 
   if ((len = RFCNB_Put_Pkt(con, pkt, RFCNB_Pkt_Sess_Len)) < 0) {
-
+    RFCNB_Free_Pkt(pkt);
     return(RFCNBE_Bad);       /* Should be able to write that lot ... */
 
     }
@@ -467,7 +479,7 @@ int RFCNB_Session_Req(struct RFCNB_Con *con,
   res_pkt.next = NULL;
 
   if ((len = RFCNB_Get_Pkt(con, &res_pkt, sizeof(resp))) < 0) {
-
+    RFCNB_Free_Pkt(pkt);
     return(RFCNBE_Bad);
 
   }
@@ -501,12 +513,12 @@ int RFCNB_Session_Req(struct RFCNB_Con *con,
 	RFCNB_errno = RFCNBE_ProtErr;
 	break;
       }
-
+      RFCNB_Free_Pkt(pkt);
       return(RFCNBE_Bad);
       break;
 
     case RFCNB_SESSION_ACK:        /* Got what we wanted ...      */
-
+      RFCNB_Free_Pkt(pkt);
       return(0);
       break;
 
@@ -516,13 +528,14 @@ int RFCNB_Session_Req(struct RFCNB_Con *con,
 
       memcpy(Dest_IP, (resp + RFCNB_Pkt_IP_Offset), sizeof(struct in_addr));
       *port = SVAL(resp, RFCNB_Pkt_Port_Offset);
-
+      RFCNB_Free_Pkt(pkt);
       return(0);
       break;
 
     default:  /* A protocol error */
 
       RFCNB_errno = RFCNBE_ProtErr;
+      RFCNB_Free_Pkt(pkt);
       return(RFCNBE_Bad);
       break;
     }

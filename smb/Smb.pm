@@ -18,7 +18,7 @@ require AutoLoader;
 	NTV_PROTOCOL_ERROR
 	NTV_SERVER_ERROR
 );
-$VERSION = '0.92';
+$VERSION = '0.96';
 
 sub authen {
   my @args = @_;

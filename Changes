@@ -1,3 +1,55 @@
+0.21  03. Sept 2002
+
+   - Fixed bug that had cut nonce on null byte, which cause
+     smb auth to fail randomly
+
+0.20  27. Aug 2002
+   
+   - Directly close connection to smb server after validation 
+
+0.19  26. Aug 2002
+
+   - Fixed in smbval c library to allow multiple connections at the same
+     time (i.e. set VcNumber to 1 instead of 0)
+   - Rewored serialziation code. It now makes sure that the whole
+     request to the smb server is serialzied.
+   - Added semtimeout directive to avoid endless locks.
+   - Debug messages cleanup. Now can set ntlmdebug to 1 or 2 to
+     get less/more verbose infomations.
+
+0.18  23. Aug 2002
+
+   - Update smbval library
+   - Fixed problem with guest access. Before 0.18 smbval lib would
+     logon any user if the domain contains a guest account.
+     Patch from Eric Devolder.
+   - Fixed problem that smbval lib cannot handle two requests at
+     the same time. I don't know if this is a general problem
+     of the smb protocol, but after doing a lot of research
+     the only solution I found is to serialzie all requests
+     to the server. See also PerlSetVar ntlmsemkey.
+   - Added fallbackdomain which is used when the domain the user
+     supplied is not configured. Patch from David B. Pasirstein.
+   - Fixed missing headers for Basic Auth. Patch from  David B. Pasirstein.
+   - Make username always lowercase in connection record, to avoid
+     problems when comparing user name (e.g. in q require directive)
+
+0.17  19. Apr 2002
+
+   - fix bug with ntlmauthoritative off
+   - fix compile problem on FreeBSD reported by Ryan Parr.
+
+0.16  14. Apr 2002
+
+   - Return DECLINE to pass request to next authentication handler
+     in case ntlmauthoritative is not set and a communication error
+     with the Domain Controller has occured.
+   - Return DECLINE to pass request to next authentication handler
+     in case ntlmauthoritative is not set and we have credentials
+     for another authorization method given from the browser.
+   - Log the connection header in debug mode to see if it's a keep
+     alive request.
+
  0.15  9. Apr 2002
 
    - Added patch from Brian Paulsen which causes correct handling of

@@ -12,7 +12,7 @@ THIS PACKAGE IS PROVIDED "AS IS" AND WITHOUT ANY EXPRESS OR IMPLIED
 WARRANTIES, INCLUDING, WITHOUT LIMITATION, THE IMPLIED WARRANTIES OF 
 MERCHANTIBILITY AND FITNESS FOR A PARTICULAR PURPOSE.
 
-$Id: README,v 1.4 2002/04/10 03:39:05 richter Exp $
+$Id: README,v 1.5 2002/04/19 04:06:02 richter Exp $
 
 
 OVERVIEW
@@ -74,5 +74,7 @@ AUTHOR
 
 G. Richter (richter@dev.ecos.de)
 
+Development of this package, versions 0.01-0.13 was sponsored by:
+Siemens: http://www.siemens.com
 
 

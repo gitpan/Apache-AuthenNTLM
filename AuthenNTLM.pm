@@ -10,7 +10,7 @@
 #   IMPLIED WARRANTIES, INCLUDING, WITHOUT LIMITATION, THE IMPLIED
 #   WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR A PARTICULAR PURPOSE.
 #
-#   $Id: AuthenNTLM.pm,v 1.13 2002/04/09 06:52:38 richter Exp $
+#   $Id: AuthenNTLM.pm,v 1.24 2002/09/03 16:03:04 richter Exp $
 #
 ###################################################################################
 
@@ -20,18 +20,17 @@ package Apache::AuthenNTLM ;
 use strict ;
 use vars qw{$cache $VERSION %msgflags1 %msgflags2 %msgflags3 %invflags1 %invflags2 %invflags3} ;
 
-$VERSION = 0.15 ;
+$VERSION = 0.21 ;
 
 my $debug = 0 ;
 
 $cache = undef ;
 
 use MIME::Base64 () ;
-use Authen::Smb 0.92 ;
-
-#use Crypt::SmbHash ;
-#use Digest::MD4 ;
+use Authen::Smb 0.95 ;
+use Socket ;
 use Apache::Constants qw(:common);
+
 
 %msgflags1 = ( 0x01 => "NEGOTIATE_UNICODE",
        0x02 => "NEGOTIATE_OEM",
@@ -75,7 +74,7 @@ sub get_config
     return if ($self -> {smbpdc}) ; # config already setup
 
     $debug = $r -> dir_config ('ntlmdebug') || 0 ;
-    $debug = $self -> {debug} = lc($debug) eq 'on' || $debug == 1?1:0 ;
+    $debug = $self -> {debug} = lc($debug) eq 'on'?1:($debug+0) ;
 
     my @config = $r -> dir_config -> get ('ntdomain') ;
 
@@ -85,10 +84,11 @@ sub get_config
         $domain = lc ($domain) ;
         $self -> {smbpdc}{$domain} = $pdc ;
         $self -> {smbbdc}{$domain} = $bdc ;
-        print STDERR "AuthenNTLM: Config Domain = $domain  pdc = $pdc  bdc = $bdc\n" if ($debug) ; 
+        print STDERR "[$$] AuthenNTLM: Config Domain = $domain  pdc = $pdc  bdc = $bdc\n" if ($debug) ; 
         }
 
     $self -> {defaultdomain} = $r -> dir_config ('defaultdomain') || '' ;
+    $self -> {fallbackdomain} = $r -> dir_config ('fallbackdomain') || '' ;
     $self -> {authtype} = $r -> auth_type || 'ntlm,basic' ;
     $self -> {authname} = $r -> auth_name || ''  ;
     my $autho = $r -> dir_config ('ntlmauthoritative') || 'on' ;
@@ -101,12 +101,20 @@ sub get_config
 
     $self -> {authntlm} = 1 if ($self -> {authtype} =~ /(^|,)ntlm($|,)/i) ;
     $self -> {authbasic} = 1 if ($self -> {authtype} =~ /(^|,)basic($|,)/i) ;
+
+    $self -> {semkey} = $r -> dir_config ('ntlmsemkey') ;
+    $self -> {semkey} = 23754 if (!defined ($self -> {semkey})) ;
+    $self -> {semtimeout} = $r -> dir_config ('ntlmsemtimeout') ;
+    $self -> {semtimeout} = 2 if (!defined ($self -> {semtimeout})) ;
+
     if ($debug)
 	{
-	print STDERR "AuthenNTLM: Config Default Domain = $self->{defaultdomain}\n"  ; 
-	print STDERR "AuthenNTLM: Config AuthType = $self->{authtype} AuthName = $self->{authname}\n"  ; 
-	print STDERR "AuthenNTLM: Config Auth NTLM = $self->{authntlm} Auth Basic = $self->{authbasic}\n"  ; 
-	print STDERR "AuthenNTLM: Config NTLMAuthoritative = ",  $self -> {ntlmauthoritative}?'on':'off', "  BasicAuthoritative = ",  $self -> {basicauthoritative}?'on':'off', "\n"  ; 
+	print STDERR "[$$] AuthenNTLM: Config Default Domain = $self->{defaultdomain}\n"  ; 
+	print STDERR "[$$] AuthenNTLM: Config Fallback Domain = $self->{fallbackdomain}\n"  ; 
+	print STDERR "[$$] AuthenNTLM: Config AuthType = $self->{authtype} AuthName = $self->{authname}\n"  ; 
+	print STDERR "[$$] AuthenNTLM: Config Auth NTLM = $self->{authntlm} Auth Basic = $self->{authbasic}\n"  ; 
+	print STDERR "[$$] AuthenNTLM: Config NTLMAuthoritative = " .  ($self -> {ntlmauthoritative}?'on':'off') . "  BasicAuthoritative = " . ($self -> {basicauthoritative}?'on':'off') . "\n"  ; 
+	print STDERR "[$$] AuthenNTLM: Config Semaphore key = $self->{semkey} timeout = $self->{semtimeout}\n"  ; 
 	}
     }
 
@@ -119,23 +127,44 @@ sub get_nonce
     # reuse connection if possible
     return $self -> {nonce} if ($self -> {nonce} && $self -> {smbhandle}) ;
 
-    my $nonce = '12345678' ;
+    # this is not the real nonce!
+    # we just need to preallocate some space (8 bytes) where Authen::Smb::Valid_User_Connect
+    # puts the real nonce
+    my $nonce = '12345678' ; 
+    $self -> {domain} = $self -> {fallbackdomain} 
+                       if (!($self -> {smbpdc}{lc ($self -> {domain})}));
     my $domain  = lc ($self -> {domain}) ;
     my $pdc     = $self -> {smbpdc}{$domain} ;
     my $bdc     = $self -> {smbbdc}{$domain} ;
 
     $self -> {nonce} = undef ;
     
-    print STDERR "AuthenNTLM: Connect to pdc = $pdc bdc = $bdc domain = $domain\n" if ($debug) ;
+    print STDERR "[$$] AuthenNTLM: Connect to pdc = $pdc bdc = $bdc domain = $domain\n" if ($debug) ;
+
+    # smb aborts any connection that where no user is looged on as soon as somebody
+    # tries to open another one. So we have to make sure two request, do not start
+    # two auth cycles at the same time. To avoid a hang of the whole server we wrap it with
+    # a small timeout
+    if ($self->{semkey}) 
+        {
+        eval
+            {
+            local $SIG{ALRM} = sub { print STDERR "[$$] AuthenNTLM: timed out while waiting for lock (key = $self->{semkey})\n"; die ; };
+            alarm $self -> {semtimeout} ;
+            $self -> {lock} = Apache::AuthenNTLM::Lock -> lock ($self->{semkey}, $debug) ;
+            alarm 0;
+            };
+        }
+
     $self -> {smbhandle} = Authen::Smb::Valid_User_Connect ($pdc, $bdc, $domain, $nonce) ;
     
     if (!$self -> {smbhandle}) 
         {
-        $r->log_reason("Connect to SMB Server faild (pdc = $pdc bdc = $bdc domain = $domain) for " . $r -> uri) ;
+        $r->log_reason("Connect to SMB Server faild (pdc = $pdc bdc = $bdc domain = $domain error = ". 
+                        Authen::Smb::SMBlib_errno . '/' . Authen::Smb::SMBlib_SMB_Error . ") for " . $r -> uri) ;
         return undef ;
         }
    
-    
     return $self -> {nonce} = $nonce ;
     }
     
@@ -148,13 +177,15 @@ sub verify_user
 
     if (!$self -> {smbhandle})
         {
+        $self -> {lock} = undef ; # reset lock in case anything has gone wrong
         $r->log_reason("SMB Server connection not open in state 3 for " . $r -> uri) ;
         return ;
         }
 
     my $rc ;
 
-    print STDERR "AuthenNTLM: Verify user $self->{username} via smb server\n" if ($debug) ;
+    print STDERR "[$$] AuthenNTLM: Verify user $self->{username} via smb server\n" if ($debug) ;
+
     if ($self -> {basic})
 	{
 	$rc = Authen::Smb::Valid_User_Auth ($self -> {smbhandle}, $self->{username}, $self -> {password}) ;
@@ -163,17 +194,22 @@ sub verify_user
 	{
 	$rc = Authen::Smb::Valid_User_Auth ($self -> {smbhandle}, $self->{username}, $self -> {usernthash}, 1, $self->{userdomain}) ;
 	}
+    my $errno  = Authen::Smb::SMBlib_errno ;
+    my $smberr = Authen::Smb::SMBlib_SMB_Error ;
+    Authen::Smb::Valid_User_Disconnect ($self -> {smbhandle}) if ($self -> {smbhandle}) ;
+    $self -> {smbhandle} = undef ;
+    $self -> {lock}      = undef ;
 
     if ($rc == &Authen::Smb::NTV_LOGON_ERROR)
         {
-        $r->log_reason("Wrong password/user (rc=$rc): $self->{userdomain}\\$self->{username} for " . $r -> uri) ;
-        print STDERR "AuthenNTLM: rc = $rc  ntlmhash = $self->{usernthash}\n" if ($debug) ; 
+        $r->log_reason("Wrong password/user (rc=$rc/$errno/$smberr): $self->{userdomain}\\$self->{username} for " . $r -> uri) ;
+        print STDERR "[$$] AuthenNTLM: rc = $rc  ntlmhash = $self->{usernthash}\n" if ($debug) ; 
         return ;
         }
 
     if ($rc)
         {
-        $r->log_reason("SMB Server error $rc for " . $r -> uri) ;
+        $r->log_reason("SMB Server error $rc/$errno/$smberr for " . $r -> uri) ;
         return ;
         }
 
@@ -186,7 +222,7 @@ sub map_user
     {
     my ($self, $r) = @_ ;
 
-    return "$self->{userdomain}\\$self->{username}" ;
+    return lc("$self->{userdomain}\\$self->{username}") ;
     }
 
 
@@ -218,7 +254,12 @@ sub get_msg_data
     $self -> {ntlm}  = 0 ;
     $self -> {basic} = 0 ;
 
-    print STDERR "AuthenNTLM: Authorization Header ", defined($auth_line)?$auth_line:'<not given>', "\n" if ($debug) ;
+    if ($debug)
+        { 
+        $auth_line =~ /^(.*?)\s+/ ;
+        my $type = $1 ;
+        print STDERR "[$$] AuthenNTLM: Authorization Header " . (defined($auth_line)?($debug > 1?$auth_line:$type):'<not given>') . "\n" if ($debug) ;
+        }
     if ($self -> {authntlm} && ($auth_line =~ /^NTLM\s+(.*?)$/i)) 
 	{
 	$self -> {ntlm} = 1 ;
@@ -235,14 +276,14 @@ sub get_msg_data
     my $data = MIME::Base64::decode($1) ;
 
 
-    if ($debug)
+    if ($debug > 1)
         {
-        print STDERR "AuthenNTLM: Got: " ;
+        my @out ;
         for (my $i = 0; $i < length($data); $i++)
             {
-            printf STDERR "%x ", unpack('C', substr($data, $i, 1)) ;
+            push @out, unpack('C', substr($data, $i, 1)) ;
             }
-        print STDERR "\n" ;
+        print STDERR "[$$] AuthenNTLM: Got: " . join (' ', @out). "\n" ;
         }
 
     return $data ;
@@ -304,7 +345,7 @@ sub get_msg1
             }
             my $flag2str = join( ",", @flag2str );
     
-        print STDERR "AuthenNTLM: protocol=$protocol, type=$type, flags1=$flags1($flag1str), flags2=$flags2($flag2str), domain length=$dom_len, domain offset=$dom_off, host length=$host_len, host offset=$host_off, host=$host, domain=$domain\n" ;
+        print STDERR "[$$] AuthenNTLM: protocol=$protocol, type=$type, flags1=$flags1($flag1str), flags2=$flags2($flag2str), domain length=$dom_len, domain offset=$dom_off, host length=$host_len, host offset=$host_off, host=$host, domain=$domain\n" ;
         }
 
 
@@ -328,16 +369,19 @@ sub set_msg2
    
     if ($debug)
         {
-        print STDERR "AuthenNTLM: Send: " ;
-        for (my $i = 0; $i < length($data); $i++)
+        if ($debug > 1)
             {
-            printf STDERR "%x ", unpack('C', substr($data, $i, 1)) ;
+            my @out ;
+            for (my $i = 0; $i < length($data); $i++)
+                {
+                push @out, unpack('C', substr($data, $i, 1)) ;
+                }
+            print STDERR "[$$] AuthenNTLM: Send: " . join (' ', @out). "\n" ;
             }
-        print STDERR "\n" ;
-        print STDERR "AuthenNTLM: charencoding = $charencoding\n";
-        print STDERR "AuthenNTLM: flags2 = $flags2\n";
-        print STDERR "AuthenNTLM: nonce=$nonce\n" if $debug > 1;
-        print STDERR "AuthenNTLM: Send header: $header\n" ;
+        print STDERR "[$$] AuthenNTLM: charencoding = $charencoding\n";
+        print STDERR "[$$] AuthenNTLM: flags2 = $flags2\n";
+        print STDERR "[$$] AuthenNTLM: nonce=$nonce\n" if ($debug > 1);
+        print STDERR "[$$] AuthenNTLM: Send header: " . ($debug > 1?$header:'NTLM ...') . "\n" ;
         }
 
     }
@@ -369,7 +413,7 @@ sub get_msg3
 
     if ($debug)
         {
-        print STDERR "AuthenNTLM: protocol=$protocol, type=$type, user=$user, host=$host, domain=$domain, msg_len=$msg_len\n" ;
+        print STDERR "[$$] AuthenNTLM: protocol=$protocol, type=$type, user=$user, host=$host, domain=$domain, msg_len=$msg_len\n" ;
         }
 
 
@@ -398,7 +442,7 @@ sub get_basic
 
     if ($debug)
         {
-        print STDERR "AuthenNTLM: basic auth username = $self->{domain}\\$self->{username}\n" ;
+        print STDERR "[$$] AuthenNTLM: basic auth username = $self->{domain}\\$self->{username}\n" ;
         }
 
     return -1 ;
@@ -422,12 +466,17 @@ sub handler ($$)
     my $nonce = '' ;
     my $self ;
     my $conn = $r -> connection ;
+    my $connhdr = $r -> header_in ('Connection') ;
 
     my $fh = select (STDERR) ;
     $| = 1 ;
     select ($fh) ;
 
-    print STDERR "AuthenNTLM: Start NTLM Authen handler pid = $$, connection = $$conn cuser = ", $conn -> user, ' ip = ', $conn -> remote_ip, ' remote_host = <', $conn -> remote_host, ">\n" if ($debug) ; 
+    my ($addr, $port) = sockaddr_in ($conn -> remote_addr) ;
+
+    
+    print STDERR "[$$] AuthenNTLM: Start NTLM Authen handler pid = $$, connection = $$conn conn_http_hdr = $connhdr  cuser = " . $conn -> user .
+                    ' remote_ip = ' . $conn -> remote_ip . " remote_port = " . unpack('n', $port) . ' remote_host = <' . $conn -> remote_host . "> version = $VERSION\n" if ($debug) ; 
     
     # we cannot attach our object to the connection record. Since in
     # Apache 1.3 there is only one connection at a time per process
@@ -441,19 +490,20 @@ sub handler ($$)
         $self = {connectionid => $$conn, remote_host => $conn -> remote_host} ;
         bless $self, $class ;
 	$cache = $self ;
-	print STDERR "AuthenNTLM: Setup new object\n" if ($debug) ; 
+	print STDERR "[$$] AuthenNTLM: Setup new object\n" if ($debug) ; 
         }
     else
         {
         $self = $cache ;
-	print STDERR "AuthenNTLM: Object exists user = $self->{userdomain}\\$self->{username}\n" if ($debug) ; 
+	print STDERR "[$$] AuthenNTLM: Object exists user = $self->{userdomain}\\$self->{username}\n" if ($debug) ; 
 	
 	if ($self -> {ok})
             {
             $conn -> user($self->{mappedusername}) ;
 
             # we accecpt the user because we are on the same connection
-            print STDERR "AuthenNTLM: OK because same connection pid = $$, connection = $$conn cuser = ", $conn -> user, ' ip = ', $conn -> remote_ip, "\n" if ($debug) ; 
+            print STDERR "[$$] AuthenNTLM: OK because same connection pid = $$, connection = $$conn cuser = " . 
+                                $conn -> user . ' ip = ' . $conn -> remote_ip . "\n" if ($debug) ; 
             return OK ;
             }
         }
@@ -463,11 +513,23 @@ sub handler ($$)
 
     if (!($type = $self -> get_msg ($r)))
         {
+        $self -> {lock} = undef ; # reset lock in case anything has gone wrong
+        if (!$self->{ntlmauthoritative}) 
+            { # see if we have any header
+            my $auth_line = $r -> header_in ($r->proxyreq ? 'Proxy-Authorization'
+                                    : 'Authorization') ;
+            if ($auth_line)
+                {
+                $r->log_reason('Bad/Missing NTLM Authorization Header for ' . $r->uri . '; DECLINEing because we are not authoritative' ) ;
+                return DECLINED ;
+                }
+            }
+
         $r->log_reason('Bad/Missing NTLM/Basic Authorization Header for ' . $r->uri) ;
         
 	my $hdr = $r -> err_headers_out ;
         $hdr -> add ($r->proxyreq ? 'Proxy-Authenticate' : 'WWW-Authenticate', 'NTLM') if ($self -> {authntlm}) ;
-        $hdr -> add ($r->proxyreq ? 'Proxy-Authenticate' : 'WWW-Authenticate', 'Basic realm="' . $self -> {authname} . '"') if ($self -> {authntlm}) ;
+        $hdr -> add ($r->proxyreq ? 'Proxy-Authenticate' : 'WWW-Authenticate', 'Basic realm="' . $self -> {authname} . '"') if ($self -> {authbasic}) ;
         return AUTH_REQUIRED ;
         }
 
@@ -476,8 +538,9 @@ sub handler ($$)
         my $nonce = $self -> get_nonce ($r) ;
         if (!$nonce) 
             {
+            $self -> {lock} = undef ; # reset lock in case anything has gone wrong
             $r->log_reason("Cannot get nonce for " . $r->uri) ;
-            return SERVER_ERROR ;
+            return $self->{ntlmauthoritative}?SERVER_ERROR:DECLINED ;
             }
 
         $self -> set_msg2 ($r, $nonce) ;
@@ -491,7 +554,7 @@ sub handler ($$)
                 {
                 my $hdr = $r -> err_headers_out ;
                 $hdr -> add ($r->proxyreq ? 'Proxy-Authenticate' : 'WWW-Authenticate', 'NTLM') if ($self -> {authntlm}) ;
-                $hdr -> add ($r->proxyreq ? 'Proxy-Authenticate' : 'WWW-Authenticate', 'Basic realm="' . $self -> {authname} . '"') if ($self -> {authntlm}) ;
+                $hdr -> add ($r->proxyreq ? 'Proxy-Authenticate' : 'WWW-Authenticate', 'Basic realm="' . $self -> {authname} . '"') if ($self -> {authbasic}) ;
                 return AUTH_REQUIRED ;
                 }
             else 
@@ -505,25 +568,76 @@ sub handler ($$)
         my $nonce = $self -> get_nonce ($r) ;
         if (!$nonce) 
             {
+            $self -> {lock} = undef ; # reset lock in case anything has gone wrong
             $r->log_reason("Cannot get nonce for " . $r->uri) ;
             return SERVER_ERROR ;
             }
-        return $self -> {basicauthoritative}?AUTH_REQUIRED:DECLINED if (!$self -> verify_user ($r)) ;
+
+        if (!$self -> verify_user ($r))
+            {
+            if ($self -> {basicauthoritative})
+                {
+                my $hdr = $r -> err_headers_out ;
+                $hdr -> add ($r->proxyreq ? 'Proxy-Authenticate' :'WWW-Authenticate', 'Basic realm="' . $self -> {authname} . '"') if ($self -> {authbasic}) ;
+                return AUTH_REQUIRED ;
+                }
+            else
+                {
+                return DECLINED;
+                }
+            }
         }
     else
         {
+        $self -> {lock} = undef ; # reset lock in case anything has gone wrong
         $r->log_reason("Bad NTLM Authorization Header type $type for " . $r->uri) ;
         return AUTH_REQUIRED ;
         }
 
+    $self -> {lock} = undef ; # reset lock in case anything has gone wrong
     $conn -> user($self -> {mappedusername} = $self -> map_user ($r)) ;
 
     $self->{ok} = 1 ;
 
-    print STDERR "AuthenNTLM: OK pid = $$, connection = $$conn cuser = ", $conn -> user, ' ip = ', $conn -> remote_ip, "\n" if ($debug) ; 
+    print STDERR "[$$] AuthenNTLM: OK pid = $$, connection = $$conn cuser = " . $conn -> user .
+                     ' ip = ' . $conn -> remote_ip . "\n" if ($debug) ; 
 
     return OK ;
     }
+
+
+
+package Apache::AuthenNTLM::Lock ;
+
+use IPC::SysV qw(IPC_CREAT S_IRWXU SEM_UNDO);
+use IPC::Semaphore;
+
+
+sub lock
+    {
+    my $class = shift ;
+    my $key   = shift ;
+    my $debug   = shift ;
+
+    my $self = bless {debug => $debug}, $class ;
+    $self->{sem} = new IPC::Semaphore($key, 1, 
+            IPC_CREAT | S_IRWXU) or die "Cannot create semaphore with key $key ($!)" ;
+
+    $self->{sem}->op(0, 0, SEM_UNDO,
+                     0, 1, SEM_UNDO);
+    print STDERR "[$$] AuthenNTLM: enter lock\n" if ($self -> {debug}) ; 
+
+    return $self ;
+    }
+
+sub DESTROY
+    {
+    my $self    = shift;
+
+    $self->{sem}->op(0, -1, SEM_UNDO);
+    print STDERR "[$$] AuthenNTLM: leave lock\n" if ($self -> {debug}) ; 
+    }
+
 
 
 1 ;
@@ -542,9 +656,9 @@ Apache::AuthenNTLM - Perform Microsoft NTLM and Basic User Authentication
 	AuthName test
 	require valid-user
 
-	#                    domain  pdc      bdc
-	PerlAddVar ntdomain "MOND    wingr1        "
-	PerlAddVar ntdomain "ecos    wingr1   venus"
+	#                    domain             pdc                bdc
+	PerlAddVar ntdomain "name_domain1   name_of_pdc1"
+	PerlAddVar ntdomain "other_domain   pdc_for_domain    bdc_for_domain"
 
 	PerlSetVar defaultdomain wingr1
 	PerlSetVar ntlmdebug 1
@@ -611,6 +725,14 @@ specify mappings for more than one domain.
 Set the default domain. This is used when the client does not provide
 any information about the domain.
 
+=head2 PerlSetVar fallbackdomain 
+
+fallbackdomain is used in cases there the domain that the user supplied
+isn't configured. This is usefull in enviroments where you have a lot of
+domains, which trust each other, so you can always authenticate against
+a single domain, so you don't need to confirue all domains available in
+your network.
+
 =head2 PerlSetVar ntlmauthoritative
 
 Setting the ntlmauthoritative directive explicitly to 'off' allows authentication
@@ -627,9 +749,27 @@ and the Basic authentication scheme is used.
 If set to 'on', which is the default, AuthenNTLM will try to verify the user and
 if it fails will give an Authorization Required reply. 
 
+=head2 PerlSetVar ntlmsemkey 
+
+There are troubles when two authentication request are takeing place at the same 
+time. If the second request starts, before the first request has successfully 
+verified the user to the smb (windows) server, the smb server will terminate the first 
+request. To avoid this Apache::AuthenNTLM serializes all requests. It uses a semaphore
+for this pupropse. The semkey directive set the key which is used (default: 23754).
+Set it to zero to turn serialization off.
+
+=head2 PerlSetVar ntlmsemtimout
+
+This set the timeout value used to wait for the semaphore. The defulat is two seconds.
+It is very small because during the time Apache waits for the semaphore, no other
+authentication request can be send to the windows server. Also Apache::AuthenNTLM
+only asks the windows server once per keep-alive connection, this timeout value
+should be as small as possible.
+
 =head2 PerlSetVar ntlmdebug 
 
-Set this to 1 if you want extra debugging information in the error log
+Set this to 1 if you want extra debugging information in the error log.
+Set it to 2 to also see the binary data of the NTLM headers.
 
 
 =head1 OVERRIDEABLE METHODS
@@ -728,3 +868,7 @@ do the real work and not shown here.
 =head1 AUTHOR
 
 G. Richter (richter@dev.ecos.de)
+
+Development of this package, versions 0.01-0.13 was sponsored by:
+Siemens: http://www.siemens.com
+
