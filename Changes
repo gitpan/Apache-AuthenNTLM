@@ -1,3 +1,6 @@
+2.10  07. Feg 2005
+   - Fixed $VERSION... 
+
 2.09  07. Feb 2005
    - Added notes about KeepAlive Off in httpd.conf file
    - Added patch from Sergey Svishchev that fixes and issue where

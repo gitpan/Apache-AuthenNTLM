@@ -19,7 +19,7 @@ package Apache::AuthenNTLM ;
 use strict ;
 use vars qw{$cache $VERSION %msgflags1 %msgflags2 %msgflags3 %invflags1 %invflags2 %invflags3 $addr $port $debug} ;
 
-$VERSION = 2.08 ;
+$VERSION = 2.10 ;
 
 $debug = 0 ;
 
