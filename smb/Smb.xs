@@ -7,6 +7,7 @@ extern "C" {
 
 #undef TRUE
 #undef FALSE
+#undef WORD
 
 #include "smbval/valid.h"
 #include "smbval/smblib-priv.h"

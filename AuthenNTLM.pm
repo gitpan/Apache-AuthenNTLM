@@ -10,7 +10,7 @@
 #   IMPLIED WARRANTIES, INCLUDING, WITHOUT LIMITATION, THE IMPLIED
 #   WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR A PARTICULAR PURPOSE.
 #
-#   $Id: AuthenNTLM.pm,v 1.24 2002/09/03 16:03:04 richter Exp $
+#   $Id: AuthenNTLM.pm,v 1.28 2002/11/12 05:31:50 richter Exp $
 #
 ###################################################################################
 
@@ -18,11 +18,11 @@
 package Apache::AuthenNTLM ;
 
 use strict ;
-use vars qw{$cache $VERSION %msgflags1 %msgflags2 %msgflags3 %invflags1 %invflags2 %invflags3} ;
+use vars qw{$cache $VERSION %msgflags1 %msgflags2 %msgflags3 %invflags1 %invflags2 %invflags3 $debug} ;
 
-$VERSION = 0.21 ;
+$VERSION = 0.23 ;
 
-my $debug = 0 ;
+$debug = 0 ;
 
 $cache = undef ;
 
@@ -125,17 +125,27 @@ sub get_nonce
     my ($self, $r) = @_ ;
 
     # reuse connection if possible
-    return $self -> {nonce} if ($self -> {nonce} && $self -> {smbhandle}) ;
+    if ($self -> {nonce} && $self -> {ok})
+        {
+        print STDERR "[$$] AuthenNTLM: Returning cached nonce\n" if ($debug) ;
+        return $self -> {nonce}
+        }
 
     # this is not the real nonce!
     # we just need to preallocate some space (8 bytes) where Authen::Smb::Valid_User_Connect
     # puts the real nonce
     my $nonce = '12345678' ; 
     $self -> {domain} = $self -> {fallbackdomain} 
-                       if (!($self -> {smbpdc}{lc ($self -> {domain})}));
+                       if ($self -> {fallbackdomain} && !($self -> {smbpdc}{lc ($self -> {domain})}));
     my $domain  = lc ($self -> {domain}) ;
     my $pdc     = $self -> {smbpdc}{$domain} ;
     my $bdc     = $self -> {smbbdc}{$domain} ;
+
+    if (!$pdc) 
+        {
+        $r->log_reason("No PDC and no fallbackdomain given for domain $domain") ;
+        return '' ;
+        }
 
     $self -> {nonce} = undef ;
     
@@ -475,7 +485,7 @@ sub handler ($$)
     my ($addr, $port) = sockaddr_in ($conn -> remote_addr) ;
 
     
-    print STDERR "[$$] AuthenNTLM: Start NTLM Authen handler pid = $$, connection = $$conn conn_http_hdr = $connhdr  cuser = " . $conn -> user .
+    print STDERR "[$$] AuthenNTLM: Start NTLM Authen handler pid = $$, connection = $$conn conn_http_hdr = $connhdr  main = " . ($r -> main) . " cuser = " . $conn -> user .
                     ' remote_ip = ' . $conn -> remote_ip . " remote_port = " . unpack('n', $port) . ' remote_host = <' . $conn -> remote_host . "> version = $VERSION\n" if ($debug) ; 
     
     # we cannot attach our object to the connection record. Since in
@@ -502,16 +512,33 @@ sub handler ($$)
             $conn -> user($self->{mappedusername}) ;
 
             # we accecpt the user because we are on the same connection
-            print STDERR "[$$] AuthenNTLM: OK because same connection pid = $$, connection = $$conn cuser = " . 
-                                $conn -> user . ' ip = ' . $conn -> remote_ip . "\n" if ($debug) ; 
-            return OK ;
+            $type = $self -> get_msg ($r);
+            my $content_len = $r -> header_in('content-length') ;
+            my $method      = $r -> method ;
+            print STDERR "[$$] AuthenNTLM: Same connection pid = $$, connection = $$conn cuser = " .
+                                $conn -> user . ' ip = ' . $conn -> remote_ip . ' method = ' . $method . ' Content-Length = ' .
+                                $content_len . ' type = ' . $type . "\n" if ($debug) ;
+
+
+            # IE (5.5, 6.0, probably others) can send a type 1 message 
+            # after authenticating on the same connection.  This is a 
+            # problem for POST messages, because IE also sends a 
+            # "Content-length: 0" with no POST data.
+            if ($method eq 'GET' || $method eq 'HEAD' || $method eq 'OPTION' || $method eq 'DELETE' ||
+                            $content_len > 0 || $type == 3) 
+                {
+                print STDERR "[$$] AuthenNTLM: OK because same connection\n" if ($debug) ;
+                return OK ;
+                }                            
+
             }
         }
 
     $self -> get_config ($r) ;
 
+    $type = $self -> get_msg ($r) if (!$type) ;
 
-    if (!($type = $self -> get_msg ($r)))
+    if (!$type)
         {
         $self -> {lock} = undef ; # reset lock in case anything has gone wrong
         if (!$self->{ntlmauthoritative}) 
@@ -539,8 +566,8 @@ sub handler ($$)
         if (!$nonce) 
             {
             $self -> {lock} = undef ; # reset lock in case anything has gone wrong
-            $r->log_reason("Cannot get nonce for " . $r->uri) ;
-            return $self->{ntlmauthoritative}?SERVER_ERROR:DECLINED ;
+            $r->log_reason("Cannot get nonce") if (!defined ($nonce)) ;
+            return $self->{ntlmauthoritative}?(defined($nonce)?FORBIDDEN:SERVER_ERROR):DECLINED ;
             }
 
         $self -> set_msg2 ($r, $nonce) ;

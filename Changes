@@ -1,3 +1,15 @@
+
+0.23  12. Nov 2002
+
+   - Fixed possible lockup with POST data. Patch from Gerald Combs.
+
+0.22  11. Nov 2002
+
+   - Return FORBIDDEN (instead of SERVER_ERROR) when no PDC is 
+     configured for a given domain
+   - Compiles now correctly with Perl 5.005
+   - Fixed problem with POST data, based on a patch from Gerald Combs.
+
 0.21  03. Sept 2002
 
    - Fixed bug that had cut nonce on null byte, which cause
