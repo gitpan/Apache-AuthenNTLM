@@ -1,3 +1,8 @@
+2.05  22.  Jan 2004
+   - fixed misspelling of ntlmsemtimeout in help section
+   - fixed deprecated method APR::SockAddr::port_get with
+     APR::SockAddr::port for MP2.  Now requires MP2 version
+     >= 1.99_12
 
 2.04  25. Jul 2003
    - beautified the handler code with Stas Beckman's fix in docs

@@ -19,7 +19,7 @@ package Apache::AuthenNTLM ;
 use strict ;
 use vars qw{$cache $VERSION %msgflags1 %msgflags2 %msgflags3 %invflags1 %invflags2 %invflags3 $addr $port $debug} ;
 
-$VERSION = 2.04 ;
+$VERSION = 2.05 ;
 
 $debug = 0 ;
 
@@ -71,7 +71,7 @@ use mod_perl ;
 # use Apache::Constants qw(:common);
 # setting the constants to help identify which version of mod_perl
 # is installed
-use constant MP2 => ($mod_perl::VERSION >= 1.99);
+use constant MP2 => ($mod_perl::VERSION >= 1.99_12);
 
 # test for the version of mod_perl, and use the appropriate libraries
 BEGIN {
@@ -115,6 +115,7 @@ sub get_config
 
     $self -> {defaultdomain} = $r -> dir_config ('defaultdomain') || '' ;
     $self -> {fallbackdomain} = $r -> dir_config ('fallbackdomain') || '' ;
+    $self -> {cacheuser} = $r -> dir_config ('cacheuser') || '0' ;
     $self -> {authtype} = $r -> auth_type || 'ntlm,basic' ;
     $self -> {authname} = $r -> auth_name || ''  ;
     my $autho = $r -> dir_config ('ntlmauthoritative') || 'on' ;
@@ -195,9 +196,11 @@ sub get_nonce
 
     $self -> {smbhandle} = Authen::Smb::Valid_User_Connect ($pdc, $bdc, $domain, $nonce) ;
 
+    print STDERR "[$$] AuthenNTLM: verify handle $self->{username} \n" if ($debug) ;
+    
     if (!$self -> {smbhandle})
         {
-        MP2 ?   $r->log_error("Connect to SMB Server failed (pdc = $pdc bdc = $bdc domain = $domain error = ". Authen::Smb::SMBlib_errno . '/' . Authen::Smb::SMBlib_SMB_Error . ") for " . $r -> uri) : $r->log_reason("Connect to SMB Server faild (pdc = $pdc bdc = $bdc domain = $domain error = ". Authen::Smb::SMBlib_errno . '/' . Authen::Smb::SMBlib_SMB_Error . ") for " . $r -> uri) ;
+        MP2 ?   $r->log_error("Connect to SMB Server failed (pdc = $pdc bdc = $bdc domain = $domain error = ". Authen::Smb::SMBlib_errno . '/' . Authen::Smb::SMBlib_SMB_Error . ") for " . $r -> uri) : $r->log_reason("Connect to SMB Server failed (pdc = $pdc bdc = $bdc domain = $domain error = ". Authen::Smb::SMBlib_errno . '/' . Authen::Smb::SMBlib_SMB_Error . ") for " . $r -> uri) ;
         return undef ;
         }
 
@@ -516,7 +519,7 @@ sub run
     if (MP2)
     {
     	my $addr = $conn -> remote_addr -> ip_get ;
-    	my $port = $conn -> remote_addr -> port_get ;
+    	my $port = MP2 ? $conn -> remote_addr -> port : $conn -> remote_addr -> port_get ;
     }
     else
     {
@@ -824,7 +827,7 @@ request. To avoid this Apache::AuthenNTLM serializes all requests. It uses a sem
 for this pupropse. The semkey directive set the key which is used (default: 23754).
 Set it to zero to turn serialization off.
 
-=head2 PerlSetVar ntlmsemtimout
+=head2 PerlSetVar ntlmsemtimeout
 
 This set the timeout value used to wait for the semaphore. The default is two seconds.
 It is very small because during the time Apache waits for the semaphore, no other
@@ -930,6 +933,20 @@ do the real work and are not shown here.
         return lookup_user ($self->{userdomain}, $self->{username}) ;
         }
 
+=head1 SUPPORT
+
+Speeves: Thanks to everyone that is helping to find bugs, etc. in this module.  Please,
+feel free to contact me and let me know of any strange things are going on with
+this module.  Also, please copy the modperl@perl.apache.org mailing list, as 
+there are probably many others that are experiencing the same problems as you, 
+and they may be able to return an answer faster than I can by myself.  Thanks :)
+
+=head1 SEE ALSO
+
+An implementation of this module which uses cookies to cache the session.
+
+Apache-AuthCookieNTLM - Leo Lapworth
+http://search.cpan.org/~llap/Apache-AuthCookieNTLM/
 
 =head1 AUTHOR
 
