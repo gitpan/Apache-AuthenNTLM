@@ -19,7 +19,7 @@ package Apache::AuthenNTLM ;
 use strict ;
 use vars qw{$cache $VERSION %msgflags1 %msgflags2 %msgflags3 %invflags1 %invflags2 %invflags3 $addr $port $debug} ;
 
-$VERSION = 2.03 ;
+$VERSION = 2.04 ;
 
 $debug = 0 ;
 
@@ -495,178 +495,12 @@ sub DESTROY
     Authen::Smb::Valid_User_Disconnect ($self -> {smbhandle}) if ($self -> {smbhandle}) ;
     }
 
-sub handler1 ($$) {
-    my ($class, $r) = @_ ;
-    my $type ;
-    my $nonce = '' ;
-    my $self ;
-    my $conn = $r -> connection ;
-    my $connhdr = MP2 ? $r -> headers_in -> {'Connection'} : $r -> header_in ('Connection') ;
+sub handler1 ($$) { &run }
+sub handler2 : method { &run }
 
-    my $fh = select (STDERR) ;
-    $| = 1 ;
-    select ($fh) ;
+*handler = MP2 ? \&handler2 : \&handler1;
 
-    if (MP2)
-    {
-    	my $addr = $conn -> remote_addr -> ip_get ;
-    	my $port = $conn -> remote_addr -> port_get ;
-    }
-    else
-    {
-    	my ($addr, $port) = sockaddr_in ($conn -> remote_addr) ;
-    }
-
-    print STDERR "[$$] AuthenNTLM: Start NTLM Authen handler pid = $$, connection = $$conn conn_http_hdr = $connhdr  main = " . ($r -> main) . " cuser = " . $r -> user .
-                    ' remote_ip = ' . $conn -> remote_ip . " remote_port = " . unpack('n', $port) . ' remote_host = <' . $conn -> remote_host . "> version = $VERSION\n" if ($debug) ;
-
-    # we cannot attach our object to the connection record. Since in
-    # Apache 1.3 there is only one connection at a time per process
-    # we can cache our object and check if the connection has changed.
-    # The check is done by slightly changing the remote_host member, which
-    # persists as long as the connection does
-    # This has to be reworked to work with Apache 2.0
-    if (ref ($cache) ne $class || $$conn != $cache -> {connectionid} || $conn -> remote_host ne $cache->{remote_host})
-        {
-	$conn -> remote_host ($conn -> remote_host . ' ') ;
-        $self = {connectionid => $$conn, remote_host => $conn -> remote_host} ;
-        bless $self, $class ;
-	$cache = $self ;
-	print STDERR "[$$] AuthenNTLM: Setup new object\n" if ($debug) ;
-        }
-    else
-        {
-        $self = $cache ;
-	print STDERR "[$$] AuthenNTLM: Object exists user = $self->{userdomain}\\$self->{username}\n" if ($debug) ; 
-	
-	if ($self -> {ok})
-            {
-            $r -> user($self->{mappedusername}) ;
-
-            # we accept the user because we are on the same connection
-            $type = $self -> get_msg ($r);
-            my $content_len = MP2 ? $r->headers_in->{'content-length'} : $r -> header_in('content-length') ;
-            my $method      = $r -> method ;
-            print STDERR "[$$] AuthenNTLM: Same connection pid = $$, connection = $$conn cuser = " .
-                                $r -> user . ' ip = ' . $conn -> remote_ip . ' method = ' . $method . ' Content-Length = ' .
-                                $content_len . ' type = ' . $type . "\n" if ($debug) ;
-
-
-            # IE (5.5, 6.0, probably others) can send a type 1 message 
-            # after authenticating on the same connection.  This is a
-            # problem for POST messages, because IE also sends a
-            # "Content-length: 0" with no POST data.
-            if ($method eq 'GET' || $method eq 'HEAD' || $method eq 'OPTION' || $method eq 'DELETE' ||
-                            $content_len > 0 || $type == 3)
-                {
-                print STDERR "[$$] AuthenNTLM: OK because same connection\n" if ($debug) ;
-                return MP2 ? Apache::OK : Apache::Constants::OK ;
-                }
-
-            }
-        }
-
-    $self -> get_config ($r) ;
-
-    $type = $self -> get_msg ($r) if (!$type) ;
-
-    if (!$type)
-        {
-        $self -> {lock} = undef ; # reset lock in case anything has gone wrong
-        if (!$self->{ntlmauthoritative})
-            { # see if we have any header
-            my $auth_line = MP2 ? $r -> headers_in->{$r->proxyreq ? 'Proxy-Authorization' : 'Authorization'} : $r -> header_in ($r->proxyreq ? 'Proxy-Authorization' : 'Authorization') ;
-            if ($auth_line)
-                {
-                MP2 ? $r->log_error('Bad/Missing NTLM Authorization Header for ' . $r->uri . '; DECLINEing because we are not authoritative' ) : $r->log_reason('Bad/Missing NTLM Authorization Header for ' . $r->uri . '; DECLINEing because we are not authoritative' ) ;
-                return MP2 ? Apache::DECLINED : Apache::Constants::DECLINED ;
-                }
-            }
-
-        MP2 ?  $r->log_error('Bad/Missing NTLM/Basic Authorization Header for ' . $r->uri) : $r->log_reason('Bad/Missing NTLM/Basic Authorization Header for ' . $r->uri) ;
-
-	my $hdr = $r -> err_headers_out ;
-        $hdr -> add ($r->proxyreq ? 'Proxy-Authenticate' : 'WWW-Authenticate', 'NTLM') if ($self -> {authntlm}) ;
-        $hdr -> add ($r->proxyreq ? 'Proxy-Authenticate' : 'WWW-Authenticate', 'Basic realm="' . $self -> {authname} . '"') if ($self -> {authbasic}) ;
-        return MP2 ? Apache::HTTP_UNAUTHORIZED : Apache::Constants::HTTP_UNAUTHORIZED ;
-        }
-
-    if ($type == 1)
-        {
-        my $nonce = $self -> get_nonce ($r) ;
-        if (!$nonce)
-            {
-            $self -> {lock} = undef ; # reset lock in case anything has gone wrong
-            MP2 ?  $r->log_error("Cannot get nonce") : $r->log_reason("Cannot get nonce") if (!defined ($nonce)) ;
-            return $self->{ntlmauthoritative} ? (defined($nonce)) ? (MP2 ? Apache::HTTP_FORBIDDEN : Apache::Constants::HTTP_FORBIDDEN) : (MP2 ? Apache::HTTP_INTERNAL_SERVER_ERROR : Apache::Constants::HTTP_INTERNAL_SERVER_ERROR) : (MP2 ? Apache::DECLINED : Apache::Constants::DECLINED) ;
-	   }
-
-        my $header1 = $self -> set_msg2 ($r, $nonce) ;
-	my $hdr = $r -> err_headers_out ;
-        $hdr -> add ($r->proxyreq ? 'Proxy-Authenticate' : 'WWW-Authenticate', $header1) if ($self -> {authntlm}) ;
-        return MP2 ? Apache::HTTP_UNAUTHORIZED : Apache::Constants::HTTP_UNAUTHORIZED ;
-        }
-    elsif ($type == 3)
-        {
-	print STDERR "[$$] handler type == 3 \n" if ($debug) ;
-        if ( !$self->verify_user( $r ) )
-            {
-            if ( $self->{ntlmauthoritative} )
-                {
-                my $hdr = $r -> err_headers_out ;
-                $hdr -> add ($r->proxyreq ? 'Proxy-Authenticate' : 'WWW-Authenticate', 'NTLM') if ($self -> {authntlm}) ;
-                $hdr -> add ($r->proxyreq ? 'Proxy-Authenticate' : 'WWW-Authenticate', 'Basic realm="' . $self -> {authname} . '"') if ($self -> {authbasic}) ;
-		return MP2 ? Apache::HTTP_UNAUTHORIZED : Apache::Constants::HTTP_UNAUTHORIZED ;
-                }
-            else
-                {
-                return MP2 ? Apache::DECLINED : Apache::Constants::DECLINED ;
-                }
-            }
-        }
-    elsif ($type == -1)
-        {
-        my $nonce = $self -> get_nonce ($r) ;
-        if (!$nonce) 
-            {
-            $self -> {lock} = undef ; # reset lock in case anything has gone wrong
-            MP2 ? $r->log_error("Cannot get nonce for " . $r->uri) : $r->log_reason("Cannot get nonce for " . $r->uri) ;
-            return MP2 ? Apache::HTTP_INTERNAL_SERVER_ERROR : Apache::Constants::HTTP_INTERNAL_SERVER_ERROR ;
-            }
-
-        if (!$self -> verify_user ($r))
-            {
-            if ($self -> {basicauthoritative})
-                {
-                my $hdr = $r -> err_headers_out ;
-                $hdr -> add ($r->proxyreq ? 'Proxy-Authenticate' :'WWW-Authenticate', 'Basic realm="' . $self -> {authname} . '"') if ($self -> {authbasic}) ;
-		return MP2 ? Apache::HTTP_UNAUTHORIZED : Apache::Constants::HTTP_UNAUTHORIZED ;
-                }
-            else
-                {
-                return MP2 ? Apache::DECLINED : Apache::Constants::DECLINED ;
-                }
-            }
-        }
-    else
-        {
-        $self -> {lock} = undef ; # reset lock in case anything has gone wrong
-        MP2 ? $r->log_error("Bad NTLM Authorization Header type $type for " . $r->uri) : $r->log_reason("Bad NTLM Authorization Header type $type for " . $r->uri) ;
-	return MP2 ? Apache::HTTP_UNAUTHORIZED : Apache::Constants::HTTP_UNAUTHORIZED ;
-        }
-
-    $self -> {lock} = undef ; # reset lock in case anything has gone wrong
-    $r -> user($self -> {mappedusername} = $self -> map_user ($r)) ;
-
-    $self->{ok} = 1 ;
-
-    print STDERR "[$$] AuthenNTLM: OK pid = $$, connection = $$conn cuser = " . $r -> user .
-                     ' ip = ' . $conn -> remote_ip . "\n" if ($debug) ;
-
-    return MP2 ? Apache::OK : Apache::Constants::OK ;
-    }
-
-sub handler2 : method
+sub run
    {
     my ($class, $r) = @_ ;
     my $type ;
@@ -709,7 +543,7 @@ sub handler2 : method
     else
         {
         $self = $cache ;
-	print STDERR "[$$] AuthenNTLM: Object exists user = $self->{userdomain}\\$self->{username}\n" if ($debug) ; 
+	print STDERR "[$$] AuthenNTLM: Object exists user = $self->{userdomain}\\$self->{username}\n" if ($debug) ;
 	
 	if ($self -> {ok})
             {
@@ -837,9 +671,6 @@ sub handler2 : method
 
     return MP2 ? Apache::OK : Apache::Constants::OK ;
     }
-
-
-*handler = MP2 ? \&handler2 : \&handler1;
 
 
  package Apache::AuthenNTLM::Lock ;

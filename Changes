@@ -1,4 +1,7 @@
 
+2.04  25. Jul 2003
+   - beautified the handler code with Stas Beckman's fix in docs
+
 2.03  24. Jul 2003
    - removed port debugging line that was causing irritation
    - fixed apt misspelling of Microsoft
