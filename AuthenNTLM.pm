@@ -19,7 +19,7 @@ package Apache::AuthenNTLM ;
 use strict ;
 use vars qw{$cache $VERSION %msgflags1 %msgflags2 %msgflags3 %invflags1 %invflags2 %invflags3 $addr $port $debug} ;
 
-$VERSION = 2.05 ;
+$VERSION = 2.06 ;
 
 $debug = 0 ;
 
@@ -133,6 +133,7 @@ sub get_config
     $self -> {semkey} = 23754 if (!defined ($self -> {semkey})) ;
     $self -> {semtimeout} = $r -> dir_config ('ntlmsemtimeout') ;
     $self -> {semtimeout} = 2 if (!defined ($self -> {semtimeout})) ;
+    $self -> {splitdomainprefix} = $r -> dir_config ('splitdomainprefix') || '\' ;
 
     if ($debug)
 	{
@@ -142,6 +143,7 @@ sub get_config
 	print STDERR "[$$] AuthenNTLM: Config Auth NTLM = $self->{authntlm} Auth Basic = $self->{authbasic}\n"  ; 
 	print STDERR "[$$] AuthenNTLM: Config NTLMAuthoritative = " .  ($self -> {ntlmauthoritative}?'on':'off') . "  BasicAuthoritative = " . ($self -> {basicauthoritative}?'on':'off') . "\n"  ; 
 	print STDERR "[$$] AuthenNTLM: Config Semaphore key = $self->{semkey} timeout = $self->{semtimeout}\n"  ; 
+	print STDERR "[$$] AuthenNTLM: Config SplitDomainPrefix = $self->{splitdomainprefix}\n"  ; 
 	}
     }
 
@@ -259,9 +261,14 @@ sub verify_user
 sub map_user
 
     {
-    my ($self, $r) = @_ ;
+     my ($self, $r) = @_ ;
 
-    return lc("$self->{userdomain}\\$self->{username}") ;
+     if ($self -> {splitdomainprefix} == 1) 
+         {
+	     return lc("$self->{username}") ;
+	 } else {
+	     return lc("$self->{userdomain}\\$self->{username}") ;
+	 }
     }
 
 
@@ -707,8 +714,6 @@ sub DESTROY
     print STDERR "[$$] AuthenNTLM: leave lock\n" if ($self -> {debug}) ;
     }
 
-
-
 1 ;
 
 __END__
@@ -730,6 +735,7 @@ Apache::AuthenNTLM - Perform Microsoft NTLM and Basic User Authentication
 	PerlAddVar ntdomain "other_domain   pdc_for_domain    bdc_for_domain"
 
 	PerlSetVar defaultdomain wingr1
+        PerlSetVar splitdomainprefix 1
 	PerlSetVar ntlmdebug 1
 	</Location>
 
@@ -746,9 +752,9 @@ The NTLM protocol performs a challenge/response to exchange a random number
 (nonce) and get back a md4 hash, which is built from the user's password
 and the nonce. This makes sure that no password goes over the wire in plain text.
 
-The main advantage of the Perl implementaion is, that it can be easily extented
+The main advantage of the Perl implementaion is, that it can be easily extended
 to verify the user/password against other sources than a windows domain controller.
-The default implementaion is to go to the domain controller for the given domain 
+The defaultf implementation is to go to the domain controller for the given domain 
 and verify the user. If you want to verify the user against another source, you
 can inherit from Apache::AuthenNTLM and override it's methods.
 
@@ -768,26 +774,45 @@ or "ntlm,basic" for doing both.
  
 =head2 AuthName
 
-Set the realm for basic authetication
+Set the realm for basic authentication
 
 =head2 require valid-user
 
-Necessary to tell Apache to require user authetication at all. Can also 
+Necessary to tell Apache to require user authentication at all. Can also 
 used to allow only some users, e.g.
 
   require user foo bar
 
-Note that Apache::AuthenNTLM does not perform any authorization, it 
-the require xxx is executed by Apache itself. Alternativly you can
+Note that Apache::AuthenNTLM does not perform any authorization, if
+the require xxx is executed by Apache itself. Alternatively you can
 use another (Perl-)module to perform authorization.
 
 
 =head2 PerlAddVar ntdomain "domain pdc bdc"
 
-This is used to create a mapping between a domain and a pdc and bdc for
-that domain. Domain, pdc and bdc must be space separated. You can
+This is used to create a mapping between a domain and both a pdc and bdc for
+that domain. Domain, pdc and bdc must be separated by a space. You can
 specify mappings for more than one domain.
 
+NOTE FOR WINDOWS ACTIVE DIRECTORY USERS: You must specify the DOMAINNAME for 
+the pdc and/or bdc.  Windows smb servers will not accept ip address in dotted
+quad form.  For example, the SPEEVES domain pdc has an ip address of 192.168.0.2.
+If you enter the ntdomain as:
+
+PerlAddVar ntdomain 192.168.0.2
+
+Then you will never be able be able to authenticate to the remote server correctly,
+and you will receive a "Can not get NONCE" error in the error_log.  You must 
+specify it as:
+
+PerlAddVar ntdomain SPEEVES
+
+This means that you will need to resolve the DOMAINNAME locally on the web server
+machine.  I put it into the /etc/hosts file.
+
+For the complete run-down on this issue, check out:
+
+http://www.gossamer-threads.com/archive/mod_perl_C1/modperl_F7/%5BFwd:_Re:_Apache::AuthenNTLM-2.04_Problems..%5D_P104237/
 
 =head2 PerlSetVar defaultdomain 
 
@@ -797,18 +822,18 @@ any information about the domain.
 =head2 PerlSetVar fallbackdomain 
 
 fallbackdomain is used in cases where the domain that the user supplied
-isn't configured. This is useful in enviroments where you have a lot of
-domains, which trust each other, so you can always authenticate against
-a single domain, so you don't need to configure all domains available in
-your network.
+isn't configured. This is useful in environments where you have a lot of
+domains, which trust each other, allowing you to always authenticate against
+a single domain, (removing the need to configure all domains available in
+your network).
 
 =head2 PerlSetVar ntlmauthoritative
 
 Setting the ntlmauthoritative directive explicitly to 'off' allows authentication
-to be passed on to lower level modules if AuthenNTLM cannot autheticate the user
+to be passed on to lower level modules if AuthenNTLM cannot authenticate the user
 and the NTLM authentication scheme is used.
-If set to 'on', which is the default, AuthenNTLM will try to verify the user and
-if it fails will give an Authorization Required reply. 
+If set to 'on', which is the default, AuthenNTLM will try to verify the user and,
+if it fails, will give an Authorization Required reply. 
 
 =head2 PerlSetVar basicauthoritative
 
@@ -824,7 +849,7 @@ There are troubles when two authentication requests take place at the same
 time. If the second request starts, before the first request has successfully 
 verified the user to the smb (windows) server, the smb server will terminate the first 
 request. To avoid this Apache::AuthenNTLM serializes all requests. It uses a semaphore
-for this pupropse. The semkey directive set the key which is used (default: 23754).
+for this purpose. The semkey directive set the key which is used (default: 23754).
 Set it to zero to turn serialization off.
 
 =head2 PerlSetVar ntlmsemtimeout
@@ -834,6 +859,13 @@ It is very small because during the time Apache waits for the semaphore, no othe
 authentication request can be sent to the windows server. Also Apache::AuthenNTLM
 only asks the windows server once per keep-alive connection, this timeout value
 should be as small as possible.
+
+=head2 PerlSetVar splitdomainprefix
+
+If set to 1, $self -> map_user ($r) will return "username" 
+else $self -> map_user ($r) will return "domain\username"
+ 
+Default is "domain\username" 
 
 =head2 PerlSetVar ntlmdebug 
 
@@ -845,7 +877,7 @@ Set it to 2 to also see the binary data of the NTLM headers.
 
 Each of the following methods takes the Apache object as argument. Information
 about the current authentication can be found inside the object Apache::AuthenNTLM 
-itself. To override then methods, create our own class which inherits from
+itself. To override the methods, create our own class which inherits from
 Apache::AuthenNTLM and use it in httpd.conf e.g. 	
 
 	PerlAuthenHandler Apache::MyAuthenNTLM 

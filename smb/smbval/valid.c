@@ -24,7 +24,7 @@ int Valid_User(char *USERNAME,char *PASSWORD,char *SERVER,char *BACKUP, char *DO
   if (con == NULL) { /* Error ... */
    con = SMB_Connect_Server(NULL, BACKUP, DOMAIN);
    if (con == NULL) {
-   	return(NTV_SERVER_ERROR);   
+   	return(NTV_SERVER_ERROR);
    }
   }
   if (SMB_Negotiate(con, SMB_Prots) < 0) { /* An error */
@@ -59,6 +59,7 @@ void *Valid_User_Connect(char *SERVER,char *BACKUP, char *DOMAIN, char *nonce)
 			    "LM1.2X002",
 			    "Samba",
 			    "NT LM 0.12",
+
 			    "NT LANMAN 1.0",
 			    NULL};
   SMB_Handle_Type con;

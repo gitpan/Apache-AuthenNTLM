@@ -59,6 +59,7 @@ void *Valid_User_Connect(char *SERVER,char *BACKUP, char *DOMAIN, char *nonce)
 			    "LM1.2X002",
 			    "Samba",
 			    "NT LM 0.12",
+
 			    "NT LANMAN 1.0",
 			    NULL};
   SMB_Handle_Type con;
@@ -77,7 +78,7 @@ void *Valid_User_Connect(char *SERVER,char *BACKUP, char *DOMAIN, char *nonce)
   }
   /* Test for a server in share level mode do not authenticate against it */
   if (con -> Security == 0)
-    {
+ZZ    {
       SMB_Discon(con,0);
       return(NULL);
     }
@@ -102,4 +103,3 @@ void Valid_User_Disconnect(void *handle)
   SMB_Handle_Type con = handle;
   SMB_Discon(con);
 }
-?

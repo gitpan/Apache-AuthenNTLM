@@ -1,3 +1,9 @@
+2.06  16.  Feb 2004
+   - Added code to remove DOMAIN\\ from windows XP/2003 logins 
+     (patch by Michael Zehrer)
+   - Added instructions put forth by Darryl Miles about windows smb
+     server not accepting ip address, only domain name
+
 2.05  22.  Jan 2004
    - fixed misspelling of ntlmsemtimeout in help section
    - fixed deprecated method APR::SockAddr::port_get with
